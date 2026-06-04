@@ -8,7 +8,9 @@ Bands rely on auditory cues to ensure they stay in time with their bandmates and
 
 ## Notes
 **companion/** contains the Next.js frontend for companion devices to adjust the watch app's configuration
+
 **wearos/** contains the WearOS implementation
+
 **audio-engine/** contains the C++ logic that powers tempo and key detection
 
 I decided to develop the audio engine separately from the WearOS application for potential future watchOS support. Both applications would employ the same engine in their frontends. 
