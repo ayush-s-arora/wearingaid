@@ -48,12 +48,20 @@ class BleServerManager(private val context: Context) {
             .setConnectable(true)
             .build()
 
-        val data = AdvertiseData.Builder()
-            .setIncludeDeviceName(true) // Broadcasts "WearingAid - [ID]"
+        // Adjust for 31-byte BLE limit
+
+        // Packet 1: UUID (18 bytes)
+        val advertiseData = AdvertiseData.Builder()
+            .setIncludeDeviceName(false) // Disabled to save space
             .addServiceUuid(ParcelUuid(SERVICE_UUID))
             .build()
 
-        advertiser.startAdvertising(settings, data, advertiseCallback)
+        // Packet 2: Device Name (19 bytes)
+        val scanResponseData = AdvertiseData.Builder()
+            .setIncludeDeviceName(true)
+            .build()
+
+        advertiser.startAdvertising(settings, advertiseData, scanResponseData, advertiseCallback)
     }
 
     private val advertiseCallback = object : AdvertiseCallback() {

@@ -13,7 +13,8 @@ private val WearingAidColorScheme = ColorScheme(
     primary = CompanionPrimaryBlue,
     onPrimary = CompanionText,
     tertiary = CompanionAccentGreen,
-    onTertiary = CompanionBackground
+    onTertiary = CompanionBackground,
+    error = CompanionAccentYellow
 )
 
 @Composable

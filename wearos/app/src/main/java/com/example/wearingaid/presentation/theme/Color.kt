@@ -2,9 +2,10 @@ package com.example.wearingaid.presentation.theme
 
 import androidx.compose.ui.graphics.Color
 
-val CompanionBackground = Color(0xFF000000) // Pure black for OLED battery life
-val CompanionSurface = Color(0xFF111827)    // bg-gray-900
-val CompanionText = Color(0xFFFFFFFF)       // text-white
-val CompanionTextSecondary = Color(0xFF9CA3AF) // text-gray-400
-val CompanionAccentGreen = Color(0xFF4ADE80) // text-green-400 (Status indicator)
-val CompanionPrimaryBlue = Color(0xFF2563EB) // bg-blue-600 (Buttons/Interactive elements)
+val CompanionBackground = Color(0xFF000000)    // Pure black for OLED battery
+val CompanionSurface = Color(0xFF111827)       // Web Card Slate
+val CompanionText = Color(0xFFFFFFFF)          // White
+val CompanionTextSecondary = Color(0xFF9CA3AF) // Label Gray
+val CompanionAccentGreen = Color(0xFF4ADE80)   // Connected Green
+val CompanionAccentYellow = Color(0xFFFACC15)  // Disconnected Yellow
+val CompanionPrimaryBlue = Color(0xFF2563EB)   // Web Button Blue
