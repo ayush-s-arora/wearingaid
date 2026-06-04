@@ -28,10 +28,21 @@ import com.example.wearingaid.presentation.theme.WearingAidTheme
 import java.util.UUID
 import android.widget.Toast
 
+private val MUSICAL_KEYS = arrayOf(
+    "C Major", "C Minor", "C# Major", "C# Minor",
+    "D Major", "D Minor", "D# Major", "D# Minor",
+    "E Major", "E Minor", "F Major", "F Minor",
+    "F# Major", "F# Minor", "G Major", "G Minor",
+    "G# Major", "G# Minor", "A Major", "A Minor",
+    "A# Major", "A# Minor", "B Major", "B Minor"
+)
+
 class MainActivity : ComponentActivity() {
 
     private lateinit var bleServerManager: BleServerManager
     private var deviceId: String = ""
+    private var connectedDeviceName by mutableStateOf<String?>(null)
+    private var isPeerConnected by mutableStateOf(false)
 
     // 1. Reactive State
     private var isBroadcasting by mutableStateOf(false)
@@ -58,12 +69,48 @@ class MainActivity : ComponentActivity() {
             newId
         }
 
-        bleServerManager = BleServerManager(this)
+        bleServerManager = BleServerManager(
+            this,
+            onPacketReceived = { rawPayload ->
+            runOnUiThread {
+                try {
+                    val parts = rawPayload.split(",") // rawPayload looks like "5,#FF0000,#8B0000,..."
+                    val sens = parts[0].toInt()
+
+                    val activePalette = mutableMapOf<String, String>()
+                    for (i in MUSICAL_KEYS.indices) {
+                        // +1 because index 0 is the sensitivity value
+                        if (i + 1 < parts.size) {
+                            activePalette[MUSICAL_KEYS[i]] = parts[i + 1]
+                        }
+                    }
+
+                    // Verify
+                    Toast.makeText(
+                        this@MainActivity,
+                        "Sens: $sens | Synced ${activePalette.size} Keys",
+                        Toast.LENGTH_SHORT
+                    ).show()
+
+                } catch (e: Exception) {
+                    Toast.makeText(this@MainActivity, "Payload Parse Error", Toast.LENGTH_SHORT).show()
+                }
+            }
+            },
+            onConnectionStateChanged = { connected, name ->
+                runOnUiThread {
+                    isPeerConnected = connected
+                    connectedDeviceName = if (connected) name else null
+                }
+            }
+        )
 
         setContent {
             WearingAidApp(
                 deviceId = deviceId,
                 isBroadcasting = isBroadcasting,
+                isPeerConnected = isPeerConnected,
+                connectedDeviceName = connectedDeviceName,
                 onToggleBroadcast = { toggleBroadcasting() }
             )
         }
@@ -105,8 +152,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun stopGattServer() {
-        bleServerManager.stopServer()
+        isPeerConnected = false
+        connectedDeviceName = null
         isBroadcasting = false
+        bleServerManager.stopServer()
     }
 
     override fun onDestroy() {
@@ -120,6 +169,8 @@ class MainActivity : ComponentActivity() {
 fun WearingAidApp(
     deviceId: String,
     isBroadcasting: Boolean,
+    isPeerConnected: Boolean,
+    connectedDeviceName: String?,
     onToggleBroadcast: () -> Unit
 ) {
     WearingAidTheme {
@@ -148,8 +199,13 @@ fun WearingAidApp(
 
                         // Dynamic Status Text
                         Text(
-                            text = if (isBroadcasting) "Broadcasting" else "Idle",
-                            color = if (isBroadcasting) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.error,
+                            text = when {
+                                isPeerConnected && !connectedDeviceName.isNullOrBlank() -> "Connected to $connectedDeviceName"
+                                isPeerConnected -> "Connected"
+                                isBroadcasting -> "Broadcasting"
+                                else -> "Idle"
+                            },
+                            color = if (isPeerConnected || isBroadcasting) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.error,
                             style = MaterialTheme.typography.labelMedium
                         )
 
@@ -178,5 +234,5 @@ fun WearingAidApp(
 @WearPreviewDevices
 @Composable
 fun WearingAidAppPreview() {
-    WearingAidApp(deviceId = "A7X2", isBroadcasting = false, onToggleBroadcast = {})
+    WearingAidApp(deviceId = "A7X2", isBroadcasting = false, isPeerConnected = false, connectedDeviceName = null, onToggleBroadcast = {})
 }
