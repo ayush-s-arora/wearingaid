@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.wearingaid"
+    namespace = "com.palindrome.wearingaid"
     compileSdk {
         version = release(36) {
             minorApiLevel = 1
@@ -12,11 +12,16 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.example.wearingaid"
+        applicationId = "com.palindrome.wearingaid"
         minSdk = 30
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
+        externalNativeBuild {
+            cmake {
+                cppFlags += ""
+            }
+        }
 
     }
 
@@ -34,6 +39,12 @@ android {
     useLibrary("wear-sdk")
     buildFeatures {
         compose = true
+    }
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
 }
 
