@@ -1,31 +1,70 @@
 #include "audio_engine.h"
 #include <iostream>
+#include <vector>
+#include <cmath>
+#include <cassert>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
+// Generates a pure sine wave at a specific frequency
+void generate_sine(std::vector<float>& buffer, float freq, float sample_rate) {
+    for (size_t i = 0; i < buffer.size(); ++i) {
+        buffer[i] = std::sin(2.0f * M_PI * freq * (static_cast<float>(i) / sample_rate));
+    }
+}
+
+void verify_engine_logic() {
+    const int num_samples  = 1024;
+    const float sample_rate = 44100.0f;
+    const int convergence_frames = 20; // ~460ms, enough for Viterbi to stabilize
+    std::vector<float> sine_wave(num_samples);
+
+    // --- Test 1: A4 (440Hz) with SHAATH ---
+    {
+        EngineState* engine = engine_create();
+        generate_sine(sine_wave, 440.0f, sample_rate);
+        for (int i = 0; i < convergence_frames; ++i)
+            engine_push_audio(engine, sine_wave.data(), num_samples);
+        EngineOutput out = engine_tick_tempo(engine, 0.1f);
+        std::cout << "[Test 1] A4 SHAATH key index: " << out.estimated_key_index
+                  << " (expected 9=A major or 21=A minor)" << std::endl;
+        assert(out.estimated_key_index == 9 || out.estimated_key_index == 21);
+        engine_destroy(engine);
+    }
+
+    // --- Test 2: A4 with EDMA ---
+    {
+        EngineState* engine = engine_create();
+        engine_set_genre(engine, 2);
+        generate_sine(sine_wave, 440.0f, sample_rate);
+        for (int i = 0; i < convergence_frames; ++i)
+            engine_push_audio(engine, sine_wave.data(), num_samples);
+        EngineOutput out = engine_tick_tempo(engine, 0.1f);
+        std::cout << "[Test 2] A4 EDMA key index: " << out.estimated_key_index
+                  << " (expected 9 or 21)" << std::endl;
+        assert(out.estimated_key_index == 9 || out.estimated_key_index == 21);
+        engine_destroy(engine);
+    }
+
+    // --- Test 3: C4 (261.63Hz) with SHAATH ---
+    {
+        EngineState* engine = engine_create();
+        generate_sine(sine_wave, 261.63f, sample_rate);
+        for (int i = 0; i < convergence_frames; ++i)
+            engine_push_audio(engine, sine_wave.data(), num_samples);
+        EngineOutput out = engine_tick_tempo(engine, 0.1f);
+        std::cout << "[Test 3] C4 SHAATH key index: " << out.estimated_key_index
+                  << " (expected 0=C major or 12=C minor)" << std::endl;
+        assert(out.estimated_key_index == 0 || out.estimated_key_index == 12);
+        engine_destroy(engine);
+    }
+}
 
 int main() {
-    std::cout << "--- Starting WearOS Audio Engine Test ---\n" << std::endl;
-
-    EngineState* engine = engine_create();
-
-    // 2. Simulate a microphone detecting a C-Major chord (C, E, G are loud, rest are quiet)
-    // Index:  C     C#    D     D#    E     F     F#    G     G#    A     A#    B
-    float mock_chroma[12] = {1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f};
-    
-    std::cout << "[Test] Pushing mock C-Major chroma frame..." << std::endl;
-    engine_push_chroma(engine, mock_chroma);
-
-    // 3. Simulate an onset detector finding a beat after 0.5 seconds (120 BPM)
-    std::cout << "[Test] Simulating 0.5s beat interval..." << std::endl;
-    EngineOutput output = engine_tick_tempo(engine, 0.5f);
-
-    // 4. Print the resulting state
-    std::cout << "\n[Engine Output]" << std::endl;
-    std::cout << "Estimated Key Index: " << output.estimated_key_index << std::endl;
-    std::cout << "Estimated BPM:       " << output.estimated_bpm << std::endl;
-    std::cout << "Trigger Haptic:      " << output.trigger_haptic << "\n" << std::endl;
-
-    // 5. Prevent memory leaks
-    engine_destroy(engine);
-    
-    std::cout << "--- Test Complete ---" << std::endl;
+    std::cout << "--- Starting Strict DSP Logic Verification ---" << std::endl;
+    verify_engine_logic();
+    std::cout << "--- Verification Complete: Engine Math is Stable ---" << std::endl;
     return 0;
 }

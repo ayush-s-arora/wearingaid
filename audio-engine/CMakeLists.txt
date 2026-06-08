@@ -4,11 +4,14 @@ project(WearingAidAudioEngine)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+add_subdirectory(third_party/pffft)
+
 add_library(audio_engine STATIC
 	src/audio_engine.cpp
 )
 
-target_include_directories(audio_engine PUBLIC include third_party)
+target_include_directories(audio_engine PUBLIC include third_party third_party/pffft/include/pffft)
+target_link_libraries(audio_engine PUBLIC PFFFT::PFFFT)
 
 # Test locally
 add_executable(test_engine src/main.cpp)
