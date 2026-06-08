@@ -62,9 +62,50 @@ void verify_engine_logic() {
     }
 }
 
+void verify_tempo_logic() {
+    const int   num_samples     = 1024;
+    const float sample_rate     = 44100.0f;
+    const float frame_duration  = num_samples / sample_rate; // ~0.023s
+    const float target_bpm      = 120.0f;
+    const float beat_interval_s = 60.0f / target_bpm;       // 0.5s
+    const int   frames_per_beat = static_cast<int>(std::round(beat_interval_s / frame_duration)); // ~22
+
+    std::vector<float> beat_frame(num_samples);
+    std::vector<float> quiet_frame(num_samples);
+
+    srand(42);
+    for (auto& s : beat_frame)  s = (rand() / (float)RAND_MAX) * 2.0f - 1.0f;   // loud burst
+    for (auto& s : quiet_frame) s = (rand() / (float)RAND_MAX) * 0.01f - 0.005f; // near silence
+
+    EngineState* engine = engine_create();
+    int haptic_count = 0;
+
+    // Simulate 10 beats worth of audio
+    const int total_frames = frames_per_beat * 10;
+    for (int frame = 0; frame < total_frames; ++frame) {
+        bool is_beat = (frame % frames_per_beat == 0);
+        engine_push_audio(engine, is_beat ? beat_frame.data() : quiet_frame.data(), num_samples);
+        EngineOutput out = engine_tick_tempo(engine, frame_duration);
+        if (out.trigger_haptic) haptic_count++;
+    }
+
+    EngineOutput final_out = engine_tick_tempo(engine, 0.0f);
+    std::cout << "[Test] Estimated BPM: " << final_out.estimated_bpm
+              << " (target: " << target_bpm << ")" << std::endl;
+    std::cout << "[Test] Haptic triggers fired: " << haptic_count << std::endl;
+
+    // BPM within one step size of target
+    assert(std::abs(final_out.estimated_bpm - target_bpm) <= 4.0f);
+    // At least 6 haptics fired (giving grace for bootstrap frames)
+    assert(haptic_count >= 6);
+
+    engine_destroy(engine);
+}
+
 int main() {
     std::cout << "--- Starting Strict DSP Logic Verification ---" << std::endl;
     verify_engine_logic();
+    verify_tempo_logic();
     std::cout << "--- Verification Complete: Engine Math is Stable ---" << std::endl;
     return 0;
 }

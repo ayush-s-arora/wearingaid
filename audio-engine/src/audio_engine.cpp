@@ -20,6 +20,26 @@ private:
     float tracked_bpm;
     float time_since_last_beat;
 
+    static constexpr int   TEMPO_BPM_MIN          = 60;
+    static constexpr int   TEMPO_BPM_MAX          = 180;
+    static constexpr int   TEMPO_BPM_STEP         = 2;
+    static constexpr int   TEMPO_STATES           = (TEMPO_BPM_MAX - TEMPO_BPM_MIN) / TEMPO_BPM_STEP + 1; // 61
+    static constexpr float MIN_ONSET_GAP_S        = 0.25f;   // prevents double-triggers, allows up to 240 BPM
+    static constexpr float ONSET_THRESHOLD_RATIO  = 1.8f;    // onset if RMS > 1.8x rolling average
+    static constexpr int   ENERGY_BUF_SIZE        = 43;      // ~1 second of history at 1024/44100
+
+    Eigen::VectorXd tempo_log_viterbi;
+    Eigen::MatrixXd tempo_log_transition;
+
+    float current_time_s        = 0.0f;
+    float last_onset_time_s     = -1.0f;
+    float predicted_beat_time_s = -1.0f;
+    bool  haptic_pending        = false;
+
+    float energy_buf[ENERGY_BUF_SIZE] = {};
+    int   energy_buf_idx              = 0;
+    float energy_buf_sum              = 0.0f;
+
     void build_key_profiles(ProfileType type) {
         const double* maj_ptr = nullptr;
         const double* min_ptr = nullptr;
@@ -64,6 +84,56 @@ private:
         }
     }
 
+    void initialize_tempo() {
+        tempo_log_viterbi = Eigen::VectorXd::Constant(TEMPO_STATES, std::log(1.0 / TEMPO_STATES));
+        tempo_log_transition = Eigen::MatrixXd::Zero(TEMPO_STATES, TEMPO_STATES);
+
+        // Normally distributed falloff, since neighboring BPMs are more likely than distant ones
+        const double sigma = 2.0; // in state units = 4 BPM spread
+        for (int i = 0; i < TEMPO_STATES; ++i) {
+            double row_sum = 0.0;
+            std::vector<double> row(TEMPO_STATES);
+            for (int j = 0; j < TEMPO_STATES; ++j) {
+                double d = j - i;
+                row[j] = std::exp(-0.5 * (d / sigma) * (d / sigma));
+                row_sum += row[j];
+            }
+            for (int j = 0; j < TEMPO_STATES; ++j)
+                tempo_log_transition(i, j) = std::log(row[j] / row_sum);
+        }
+    }
+
+    Eigen::VectorXd compute_tempo_emissions(float ioi_seconds) {
+        Eigen::VectorXd log_emissions(TEMPO_STATES);
+        const double sigma_ioi = 0.03; // 30ms timing tolerance (inter-onset interval)
+        for (int s = 0; s < TEMPO_STATES; ++s) {
+            float expected_ioi = 60.0f / (TEMPO_BPM_MIN + s * TEMPO_BPM_STEP);
+            double diff = ioi_seconds - expected_ioi;
+            log_emissions(s) = -0.5 * (diff / sigma_ioi) * (diff / sigma_ioi);
+        }
+        return log_emissions;
+    }
+
+    void update_tempo_viterbi(float ioi_seconds) {
+        Eigen::VectorXd log_emissions = compute_tempo_emissions(ioi_seconds);
+        Eigen::VectorXd next_viterbi(TEMPO_STATES);
+        for (int j = 0; j < TEMPO_STATES; ++j) {
+            double max_val = -1e9;
+            for (int i = 0; i < TEMPO_STATES; ++i) {
+                double val = tempo_log_viterbi(i) + tempo_log_transition(i, j);
+                if (val > max_val) max_val = val;
+            }
+            next_viterbi(j) = max_val + log_emissions(j);
+        }
+        tempo_log_viterbi = next_viterbi.array() - next_viterbi.maxCoeff();
+    }
+
+    float get_estimated_bpm() {
+        int best_state;
+        tempo_log_viterbi.maxCoeff(&best_state);
+        return static_cast<float>(TEMPO_BPM_MIN + best_state * TEMPO_BPM_STEP);
+    }
+
     void initialize_matrices() {
         key_profiles = Eigen::MatrixXd::Zero(24, 12);
         log_transition_matrix = Eigen::MatrixXd::Zero(24, 24);
@@ -71,6 +141,7 @@ private:
 
         // Default to the contemporary band profile
         build_key_profiles(ProfileType::SHAATH);
+        initialize_tempo();
 
         // Inertial Transition flywheel (85% hold probability)
         for (int i = 0; i < 24; ++i) {
@@ -140,6 +211,50 @@ public:
         
         log_viterbi_path = next_viterbi.array() - next_viterbi.maxCoeff();
         log_viterbi_path.maxCoeff(&current_estimated_key);
+
+        if (active_features & WEARINGAID_FEATURE_TEMPO) {
+            // RMS energy of this frame
+            float rms_sq = 0.0f;
+            for (int i = 0; i < num_samples; ++i) rms_sq += pcm_data[i] * pcm_data[i];
+            float rms = std::sqrt(rms_sq / num_samples);
+
+            // Adaptive rolling average
+            energy_buf_sum -= energy_buf[energy_buf_idx];
+            energy_buf[energy_buf_idx] = rms;
+            energy_buf_sum += rms;
+            energy_buf_idx = (energy_buf_idx + 1) % ENERGY_BUF_SIZE;
+            float avg_energy = energy_buf_sum / ENERGY_BUF_SIZE;
+
+            // Advance internal clock
+            float frame_duration_s = static_cast<float>(num_samples) / 44100.0f;
+            current_time_s += frame_duration_s;
+
+            // Onset detection: loud spike above adaptive threshold with minimum gap
+            bool is_onset = (avg_energy > 1e-6f) &&
+                            (rms > avg_energy * ONSET_THRESHOLD_RATIO) &&
+                            (current_time_s - last_onset_time_s > MIN_ONSET_GAP_S);
+
+            if (is_onset) {
+                if (last_onset_time_s > 0.0f) {
+                    float ioi = current_time_s - last_onset_time_s;
+                    float candidate_bpm = 60.0f / ioi;
+                    if (candidate_bpm >= TEMPO_BPM_MIN && candidate_bpm <= TEMPO_BPM_MAX) {
+                        update_tempo_viterbi(ioi);
+                        tracked_bpm = get_estimated_bpm();
+                        if (predicted_beat_time_s < 0.0f) {
+                            predicted_beat_time_s = current_time_s + (60.0f / tracked_bpm);
+                        }
+                    }
+                }
+                last_onset_time_s = current_time_s;
+            }
+
+            // Fire haptic when predicted beat arrives
+            if (predicted_beat_time_s > 0.0f && current_time_s >= predicted_beat_time_s) {
+                haptic_pending = true;
+                predicted_beat_time_s += 60.0f / tracked_bpm; // advance to next beat
+            }
+        }
     }
 
     void set_genre(ProfileType type) {
@@ -150,7 +265,15 @@ public:
 
     EngineOutput tick_tempo(float time_delta_seconds) {
         time_since_last_beat += time_delta_seconds;
-        return EngineOutput{current_estimated_key, tracked_bpm, 0};
+
+        int trigger = haptic_pending ? 1 : 0;
+        haptic_pending = false;
+
+        return EngineOutput{
+            current_estimated_key,
+            tracked_bpm,
+            trigger
+        };
     }
 };
 
