@@ -149,7 +149,6 @@ export default function Home() {
     writeInFlightRef.current = false;
     lastSentRef.current = null;
     setDebugMode(false);
-    setDebugLogs([]);
     setDevice(null);
     setCharacteristic(null);
     setHeartbeatCharacteristic(null);
@@ -179,14 +178,19 @@ export default function Home() {
         filters: [{ services: [WEARINGAID_SERVICE_UUID] }],
       });
 
-      // Force a fresh GATT session. Chrome reuses stale connections for paired devices
-      if (selectedDevice.gatt?.connected) {
-        selectedDevice.gatt.disconnect();
-        await new Promise<void>(r => setTimeout(r, 300));
-      }
+      // Always reset GATT state. Stale paired devices have connected=false but still fail
+      try { selectedDevice.gatt?.disconnect(); } catch {}
+      await new Promise<void>(r => setTimeout(r, 200));
 
-      setStatus("Connecting to GATT Server");
-      const server = await selectedDevice.gatt?.connect();
+      setStatus("Connecting...");
+      let server: BluetoothRemoteGATTServer | undefined;
+      try {
+        server = await selectedDevice.gatt?.connect();
+      } catch {
+        setStatus("Retrying...");
+        await new Promise<void>(r => setTimeout(r, 600));
+        server = await selectedDevice.gatt?.connect();
+      }
 
       setStatus("Getting Service");
       const service = await server?.getPrimaryService(WEARINGAID_SERVICE_UUID);
@@ -394,7 +398,6 @@ export default function Home() {
       debugHandlerRef.current = null;
       await debugChar.stopNotifications().catch(() => {});
       setDebugMode(false);
-      setDebugLogs([]);
     }
   };
 
@@ -561,9 +564,10 @@ export default function Home() {
               </button>
 
               <div className="w-full flex flex-col gap-2 mt-2">
-                <span className="text-gray-400 text-xs font-semibold border-b border-gray-700 pb-1">
-                  Activity Log
-                </span>
+                <div className="flex items-center justify-between border-b border-gray-700 pb-1">
+                  <span className="text-gray-400 text-xs font-semibold">Activity Log</span>
+                  <button onClick={() => setDebugLogs([])} className="text-gray-600 hover:text-gray-400 text-xs transition-colors">Clear</button>
+                </div>
                 <div
                   ref={logContainerRef}
                   className="bg-gray-950 rounded border border-gray-800 p-2 h-48 overflow-y-auto font-mono text-xs text-green-400 flex flex-col gap-0.5"

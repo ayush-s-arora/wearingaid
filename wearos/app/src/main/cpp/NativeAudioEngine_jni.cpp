@@ -5,6 +5,7 @@
 
 #define LOG_TAG "NativeAudioEngineJNI"
 #define ALOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+#define ALOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
 
 class OboeEngineWrapper : public oboe::AudioStreamCallback {
 public:
@@ -28,15 +29,34 @@ public:
 
         oboe::AudioStreamBuilder builder;
         builder.setDirection(oboe::Direction::Input)
-                ->setPerformanceMode(oboe::PerformanceMode::LowLatency)
+                ->setPerformanceMode(oboe::PerformanceMode::None)
+                ->setInputPreset(oboe::InputPreset::Unprocessed)
                 ->setFormat(oboe::AudioFormat::Float)
                 ->setChannelCount(1)
                 ->setSampleRate(44100)
+                // The engine hardcodes 44100 Hz in every frequency→pitch calc. setSampleRate
+                // is only a REQUEST; the mic may natively run at 48000. Force Oboe to resample
+                // to exactly 44100 so the engine's assumption always holds — otherwise every
+                // detected pitch is shifted (48000/44100 ≈ 1.46 semitones of systematic error).
+                ->setSampleRateConversionQuality(oboe::SampleRateConversionQuality::Medium)
                 ->setFramesPerCallback(1024) // matches EXPECTED_FRAME_SIZE in audio_engine.cpp
                 ->setCallback(this); // Tell Oboe to send buffers to onAudioReady()
 
         oboe::Result result = builder.openStream(stream);
         if (result == oboe::Result::OK) {
+            // Log what Oboe ACTUALLY gave us — requested params are not guaranteed.
+            // If sampleRate != 44100 or framesPerCallback != 1024, the engine silently
+            // misbehaves (wrong pitches, or frames rejected by the size guard).
+            const int actual_rate = stream->getSampleRate();
+            ALOGD("stream opened | sampleRate=%d (req 44100) | framesPerBurst=%d | framesPerCallback=%d (req 1024) | channels=%d | format=%d | inputPreset=%d | perfMode=%d",
+                  actual_rate, stream->getFramesPerBurst(),
+                  stream->getFramesPerCallback(), stream->getChannelCount(),
+                  static_cast<int>(stream->getFormat()),
+                  static_cast<int>(stream->getInputPreset()),
+                  static_cast<int>(stream->getPerformanceMode()));
+            // Hand the engine the REAL rate so its pitch/tempo math matches what the
+            // mic actually delivers (the watch captures at 48000, not the requested 44100).
+            engine_set_sample_rate(core_engine, actual_rate);
             stream->requestStart();
             is_recording = true;
         } else {
@@ -51,9 +71,20 @@ public:
         is_recording = false;
     }
 
+    int last_logged_frames = -1;
+
     // 2. The critical callback: Oboe fires this automatically when the mic has data
     oboe::DataCallbackResult onAudioReady(oboe::AudioStream *audioStream, void *audioData, int32_t numFrames) override {
         auto *floatData = static_cast<float *>(audioData);
+
+        // The engine rejects any frame whose size != 1024. If Oboe delivers a different
+        // size (it can, despite setFramesPerCallback), nothing processes and the watch
+        // looks "deaf". Log the size once and whenever it changes so this is visible.
+        if (numFrames != last_logged_frames) {
+            ALOGD("onAudioReady numFrames=%d%s", numFrames,
+                  numFrames != 1024 ? " (!= 1024 — engine will DROP these frames!)" : "");
+            last_logged_frames = numFrames;
+        }
 
         // Feed the core engine directly. Zero JNI overhead!
         engine_push_audio(core_engine, floatData, numFrames);

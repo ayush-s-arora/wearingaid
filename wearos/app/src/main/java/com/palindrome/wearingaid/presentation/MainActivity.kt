@@ -80,7 +80,7 @@ private const val PREFS_NAME = "WearingAidPrefs"
 private const val PREF_GENRE_CODE = "GENRE_CODE"
 private const val PREF_COMPANION_MODE = "COMPANION_MODE"
 private const val PREF_FEATURES = "FEATURES"
-private const val OUTPUT_TICK_SECONDS = 0.1f
+private const val OUTPUT_TICK_SECONDS = 0.05f
 
 private const val FEATURE_KEY = 1
 private const val FEATURE_TEMPO = 2
@@ -490,7 +490,7 @@ private fun WearingAidApp(
 
                     LaunchedEffect(isRecording) {
                         while (isRecording) {
-                            delay(100.milliseconds)
+                            delay(50.milliseconds)
                             onAudioTick()
                         }
                     }
