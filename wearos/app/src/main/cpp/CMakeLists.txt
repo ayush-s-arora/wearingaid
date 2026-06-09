@@ -4,10 +4,13 @@ project("wearingaid_jni")
 
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../../../../audio-engine audio_engine_build)
 
+find_package (oboe REQUIRED CONFIG)
+
 add_library(${CMAKE_PROJECT_NAME} SHARED
         NativeAudioEngine_jni.cpp)
 
 target_link_libraries(${CMAKE_PROJECT_NAME}
         audio_engine
+        oboe::oboe
         android
         log)

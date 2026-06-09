@@ -1,4 +1,4 @@
-package com.example.wearingaid.presentation.theme
+package com.palindrome.wearingaid.presentation.theme
 
 import androidx.compose.runtime.Composable
 import androidx.wear.compose.material3.ColorScheme

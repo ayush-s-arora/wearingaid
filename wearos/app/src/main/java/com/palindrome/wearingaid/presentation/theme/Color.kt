@@ -1,4 +1,4 @@
-package com.example.wearingaid.presentation.theme
+package com.palindrome.wearingaid.presentation.theme
 
 import androidx.compose.ui.graphics.Color
 

@@ -1,4 +1,4 @@
-package com.example.wearingaid.presentation
+package com.palindrome.wearingaid
 
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
@@ -15,8 +15,8 @@ import android.bluetooth.le.AdvertiseData
 import android.bluetooth.le.AdvertiseSettings
 import android.content.Context
 import android.os.Handler
-import android.os.ParcelUuid
 import android.os.Looper
+import android.os.ParcelUuid
 import android.os.SystemClock
 import android.util.Log
 import java.util.UUID

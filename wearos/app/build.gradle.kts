@@ -20,9 +20,12 @@ android {
         externalNativeBuild {
             cmake {
                 cppFlags += ""
+                arguments += "-DANDROID_STL=c++_shared"
             }
         }
-
+        buildFeatures {
+            prefab = true
+        }
     }
 
     buildTypes {
@@ -60,6 +63,7 @@ dependencies {
     implementation(libs.ui.graphics)
     implementation(libs.ui.tooling.preview)
     implementation(libs.wear.tooling.preview)
+    implementation("com.google.oboe:oboe:1.10.0")
     androidTestImplementation(platform(libs.compose.bom))
     androidTestImplementation(libs.ui.test.junit4)
     debugImplementation(libs.ui.test.manifest)

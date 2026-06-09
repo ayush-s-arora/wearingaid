@@ -1,4 +1,4 @@
-package com.example.wearingaid.presentation
+package com.palindrome.wearingaid.presentation
 
 import android.Manifest
 import android.annotation.SuppressLint
@@ -24,9 +24,10 @@ import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.ScreenScaffold
 import androidx.wear.compose.material3.Text
 import androidx.wear.compose.ui.tooling.preview.WearPreviewDevices
-import com.example.wearingaid.presentation.theme.WearingAidTheme
+import com.palindrome.wearingaid.presentation.theme.WearingAidTheme
 import java.util.UUID
 import android.widget.Toast
+import com.palindrome.wearingaid.BleServerManager
 
 private val MUSICAL_KEYS = arrayOf(
     "C Major", "C Minor", "C# Major", "C# Minor",
@@ -72,30 +73,32 @@ class MainActivity : ComponentActivity() {
         bleServerManager = BleServerManager(
             this,
             onPacketReceived = { rawPayload ->
-            runOnUiThread {
-                try {
-                    val parts = rawPayload.split(",") // rawPayload looks like "5,#FF0000,#8B0000,..."
-                    val sens = parts[0].toInt()
+                runOnUiThread {
+                    try {
+                        val parts =
+                            rawPayload.split(",") // rawPayload looks like "5,#FF0000,#8B0000,..."
+                        val sens = parts[0].toInt()
 
-                    val activePalette = mutableMapOf<String, String>()
-                    for (i in MUSICAL_KEYS.indices) {
-                        // +1 because index 0 is the sensitivity value
-                        if (i + 1 < parts.size) {
-                            activePalette[MUSICAL_KEYS[i]] = parts[i + 1]
+                        val activePalette = mutableMapOf<String, String>()
+                        for (i in MUSICAL_KEYS.indices) {
+                            // +1 because index 0 is the sensitivity value
+                            if (i + 1 < parts.size) {
+                                activePalette[MUSICAL_KEYS[i]] = parts[i + 1]
+                            }
                         }
+
+                        // Verify
+                        Toast.makeText(
+                            this@MainActivity,
+                            "Sens: $sens | Synced ${activePalette.size} Keys",
+                            Toast.LENGTH_SHORT
+                        ).show()
+
+                    } catch (_: Exception) {
+                        Toast.makeText(this@MainActivity, "Payload Parse Error", Toast.LENGTH_SHORT)
+                            .show()
                     }
-
-                    // Verify
-                    Toast.makeText(
-                        this@MainActivity,
-                        "Sens: $sens | Synced ${activePalette.size} Keys",
-                        Toast.LENGTH_SHORT
-                    ).show()
-
-                } catch (e: Exception) {
-                    Toast.makeText(this@MainActivity, "Payload Parse Error", Toast.LENGTH_SHORT).show()
                 }
-            }
             },
             onConnectionStateChanged = { connected, name ->
                 runOnUiThread {
