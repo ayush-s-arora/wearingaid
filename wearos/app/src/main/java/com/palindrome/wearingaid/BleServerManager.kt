@@ -54,6 +54,8 @@ class BleServerManager(
         }
     }
 
+    val localName: String? get() = bluetoothAdapter?.name
+
     fun startServer() {
         if (bluetoothAdapter == null || !bluetoothAdapter.isEnabled) return
 
@@ -88,7 +90,7 @@ class BleServerManager(
             .build()
 
         val advertiseData = AdvertiseData.Builder()
-            .setIncludeDeviceName(false)
+            .setIncludeDeviceName(false) // UUID alone is 18 bytes; adding the name overflows the 31-byte limit
             .addServiceUuid(ParcelUuid(serviceUuid))
             .build()
 

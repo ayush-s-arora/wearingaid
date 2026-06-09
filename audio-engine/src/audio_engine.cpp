@@ -5,6 +5,7 @@
 #include <iostream>
 #include <cmath>
 #include <algorithm>
+#include <atomic>
 
 using namespace AudioEngine;
 
@@ -16,17 +17,22 @@ private:
     
     uint32_t active_features;
 
-    int current_estimated_key;
-    float tracked_bpm;
-    float time_since_last_beat;
+    // Cross-thread values: written by process_audio (Oboe callback thread),
+    // read by tick_tempo (Kotlin coroutine thread). std::atomic ensures no torn reads.
+    std::atomic<int>   current_estimated_key{0};
+    std::atomic<float> tracked_bpm{120.0f};
+    std::atomic<bool>  haptic_pending{false};
+    std::atomic<float> last_frame_rms{0.0f};
+
+    float time_since_last_beat = 0.0f;
 
     static constexpr int   TEMPO_BPM_MIN          = 60;
     static constexpr int   TEMPO_BPM_MAX          = 180;
     static constexpr int   TEMPO_BPM_STEP         = 2;
     static constexpr int   TEMPO_STATES           = (TEMPO_BPM_MAX - TEMPO_BPM_MIN) / TEMPO_BPM_STEP + 1; // 61
-    static constexpr float MIN_ONSET_GAP_S        = 0.25f;   // prevents double-triggers, allows up to 240 BPM
-    static constexpr float ONSET_THRESHOLD_RATIO  = 1.8f;    // onset if RMS > 1.8x rolling average
-    static constexpr int   ENERGY_BUF_SIZE        = 43;      // ~1 second of history at 1024/44100
+    static constexpr float MIN_ONSET_GAP_S        = 0.25f;
+    static constexpr float ONSET_THRESHOLD_RATIO  = 1.8f;
+    static constexpr int   ENERGY_BUF_SIZE        = 43;      // ~1 s of history at 1024/44100
 
     Eigen::VectorXd tempo_log_viterbi;
     Eigen::MatrixXd tempo_log_transition;
@@ -34,11 +40,24 @@ private:
     float current_time_s        = 0.0f;
     float last_onset_time_s     = -1.0f;
     float predicted_beat_time_s = -1.0f;
-    bool  haptic_pending        = false;
 
     float energy_buf[ENERGY_BUF_SIZE] = {};
     int   energy_buf_idx              = 0;
     float energy_buf_sum              = 0.0f;
+
+    // Jiggle rejection: only update the key HMM after this many consecutive loud
+    // frames. A jiggle burst (1–3 frames, ~25–70 ms) never reaches the threshold;
+    // a music pause simply preserves the last HMM state without resetting it.
+    int sustained_frames = 0;
+    static constexpr int   MIN_SUSTAINED_FRAMES = 8;   // ~185 ms at 1024/44100; rejects wrist shakes
+    static constexpr float SILENCE_THRESHOLD    = 0.05f; // ~-26 dBFS; well below band levels
+
+    // Cached PFFFT resources — allocated once, reused every callback.
+    static constexpr int EXPECTED_FRAME_SIZE = 1024;
+    PFFFT_Setup* fft_setup = nullptr;
+    float*       fft_in    = nullptr;
+    float*       fft_out   = nullptr;
+    float*       fft_work  = nullptr;
 
     void build_key_profiles(ProfileType type) {
         const double* maj_ptr = nullptr;
@@ -153,10 +172,18 @@ private:
 
 public:
     HmmAudioEngine(uint32_t features) : active_features(features) {
+        fft_setup = pffft_new_setup(EXPECTED_FRAME_SIZE, PFFFT_REAL);
+        fft_in    = (float*)pffft_aligned_malloc(EXPECTED_FRAME_SIZE * sizeof(float));
+        fft_out   = (float*)pffft_aligned_malloc(EXPECTED_FRAME_SIZE * sizeof(float));
+        fft_work  = (float*)pffft_aligned_malloc(EXPECTED_FRAME_SIZE * sizeof(float));
         initialize_matrices();
-        current_estimated_key = 0;
-        tracked_bpm = 120.0f;
-        time_since_last_beat = 0.0f;
+    }
+
+    ~HmmAudioEngine() {
+        pffft_destroy_setup(fft_setup);
+        pffft_aligned_free(fft_in);
+        pffft_aligned_free(fft_out);
+        pffft_aligned_free(fft_work);
     }
 
     void set_features(uint32_t features) {
@@ -164,60 +191,60 @@ public:
     }
 
     void process_audio(const float* pcm_data, int num_samples) {
-        float* aligned_in = (float*)pffft_aligned_malloc(num_samples * sizeof(float));
-        float* aligned_out = (float*)pffft_aligned_malloc(num_samples * sizeof(float));
-        float* work_buffer = (float*)pffft_aligned_malloc(num_samples * sizeof(float));
+        if (num_samples != EXPECTED_FRAME_SIZE) return;
 
-        std::copy(pcm_data, pcm_data + num_samples, aligned_in);
+        // FFT using cached setup — no allocation on the hot path
+        std::copy(pcm_data, pcm_data + num_samples, fft_in);
+        pffft_transform_ordered(fft_setup, fft_in, fft_out, fft_work, PFFFT_FORWARD);
 
-        PFFFT_Setup* setup = pffft_new_setup(num_samples, PFFFT_REAL);
-        pffft_transform_ordered(setup, aligned_in, aligned_out, work_buffer, PFFFT_FORWARD);
+        // RMS — computed before the Viterbi update so the sustain gate can use it
+        float rms_sq = 0.0f;
+        for (int i = 0; i < num_samples; ++i) rms_sq += pcm_data[i] * pcm_data[i];
+        const float rms = std::sqrt(rms_sq / num_samples);
+        last_frame_rms.store(rms, std::memory_order_relaxed);
 
-        Eigen::VectorXf chroma = Eigen::VectorXf::Zero(12);
-        float sample_rate = 44100.0f; 
-        
-        for (int i = 1; i < num_samples / 2; ++i) {
-            float re = aligned_out[2 * i];
-            float im = aligned_out[2 * i + 1];
-            float magnitude = std::sqrt(re * re + im * im);
-            float frequency = i * (sample_rate / num_samples);
-            
-            if (frequency > 50.0f && frequency < 4000.0f) { 
-                int pitch = std::round(69 + 12 * std::log2(frequency / 440.0f)); // freq -> MIDI note
-                int bin = ((pitch % 12) + 12) % 12; // pitch class, C = 0
-                chroma(bin) += magnitude;
-            }
+        // Sustain gate: require MIN_SUSTAINED_FRAMES consecutive loud frames before
+        // updating the key HMM. This rejects brief jiggle transients (1–3 frames)
+        // without resetting HMM state during normal music pauses.
+        if (rms >= SILENCE_THRESHOLD) {
+            sustained_frames = std::min(sustained_frames + 1, MIN_SUSTAINED_FRAMES);
+        } else {
+            sustained_frames = 0;
         }
 
-        pffft_destroy_setup(setup);
-        pffft_aligned_free(aligned_in);
-        pffft_aligned_free(aligned_out);
-        pffft_aligned_free(work_buffer);
-
-        chroma.array() += 1e-6; 
-        chroma = chroma.array() / chroma.sum();
-        
-        Eigen::VectorXd log_emissions = (key_profiles * chroma.cast<double>()).array().log();
-        Eigen::VectorXd next_viterbi(24);
-        
-        for (int j = 0; j < 24; ++j) {
-            double max_val = -1e9;
-            for (int i = 0; i < 24; ++i) {
-                double val = log_viterbi_path(i) + log_transition_matrix(i, j);
-                if (val > max_val) max_val = val;
+        if (sustained_frames >= MIN_SUSTAINED_FRAMES) {
+            Eigen::VectorXf chroma = Eigen::VectorXf::Zero(12);
+            for (int i = 1; i < num_samples / 2; ++i) {
+                float re = fft_out[2 * i];
+                float im = fft_out[2 * i + 1];
+                float magnitude = std::sqrt(re * re + im * im);
+                float frequency = i * (44100.0f / num_samples);
+                if (frequency > 50.0f && frequency < 4000.0f) {
+                    int pitch = std::round(69 + 12 * std::log2(frequency / 440.0f));
+                    int bin = ((pitch % 12) + 12) % 12;
+                    chroma(bin) += magnitude;
+                }
             }
-            next_viterbi(j) = max_val + log_emissions(j);
+            chroma.array() += 1e-6f;
+            chroma = chroma.array() / chroma.sum();
+
+            Eigen::VectorXd log_emissions = (key_profiles * chroma.cast<double>()).array().log();
+            Eigen::VectorXd next_viterbi(24);
+            for (int j = 0; j < 24; ++j) {
+                double max_val = -1e9;
+                for (int i = 0; i < 24; ++i) {
+                    double val = log_viterbi_path(i) + log_transition_matrix(i, j);
+                    if (val > max_val) max_val = val;
+                }
+                next_viterbi(j) = max_val + log_emissions(j);
+            }
+            log_viterbi_path = next_viterbi.array() - next_viterbi.maxCoeff();
+            int key;
+            log_viterbi_path.maxCoeff(&key);
+            current_estimated_key.store(key, std::memory_order_relaxed);
         }
-        
-        log_viterbi_path = next_viterbi.array() - next_viterbi.maxCoeff();
-        log_viterbi_path.maxCoeff(&current_estimated_key);
 
         if (active_features & WEARINGAID_FEATURE_TEMPO) {
-            // RMS energy of this frame
-            float rms_sq = 0.0f;
-            for (int i = 0; i < num_samples; ++i) rms_sq += pcm_data[i] * pcm_data[i];
-            float rms = std::sqrt(rms_sq / num_samples);
-
             // Adaptive rolling average
             energy_buf_sum -= energy_buf[energy_buf_idx];
             energy_buf[energy_buf_idx] = rms;
@@ -225,11 +252,9 @@ public:
             energy_buf_idx = (energy_buf_idx + 1) % ENERGY_BUF_SIZE;
             float avg_energy = energy_buf_sum / ENERGY_BUF_SIZE;
 
-            // Advance internal clock
             float frame_duration_s = static_cast<float>(num_samples) / 44100.0f;
             current_time_s += frame_duration_s;
 
-            // Onset detection: loud spike above adaptive threshold with minimum gap
             bool is_onset = (avg_energy > 1e-6f) &&
                             (rms > avg_energy * ONSET_THRESHOLD_RATIO) &&
                             (current_time_s - last_onset_time_s > MIN_ONSET_GAP_S);
@@ -240,19 +265,19 @@ public:
                     float candidate_bpm = 60.0f / ioi;
                     if (candidate_bpm >= TEMPO_BPM_MIN && candidate_bpm <= TEMPO_BPM_MAX) {
                         update_tempo_viterbi(ioi);
-                        tracked_bpm = get_estimated_bpm();
+                        const float bpm = get_estimated_bpm();
+                        tracked_bpm.store(bpm, std::memory_order_relaxed);
                         if (predicted_beat_time_s < 0.0f) {
-                            predicted_beat_time_s = current_time_s + (60.0f / tracked_bpm);
+                            predicted_beat_time_s = current_time_s + (60.0f / bpm);
                         }
                     }
                 }
                 last_onset_time_s = current_time_s;
             }
 
-            // Fire haptic when predicted beat arrives
             if (predicted_beat_time_s > 0.0f && current_time_s >= predicted_beat_time_s) {
-                haptic_pending = true;
-                predicted_beat_time_s += 60.0f / tracked_bpm; // advance to next beat
+                haptic_pending.store(true, std::memory_order_relaxed);
+                predicted_beat_time_s += 60.0f / tracked_bpm.load(std::memory_order_relaxed);
             }
         }
     }
@@ -266,13 +291,18 @@ public:
     EngineOutput tick_tempo(float time_delta_seconds) {
         time_since_last_beat += time_delta_seconds;
 
-        int trigger = haptic_pending ? 1 : 0;
-        haptic_pending = false;
+        if (last_frame_rms.load(std::memory_order_relaxed) < SILENCE_THRESHOLD) {
+            haptic_pending.store(false, std::memory_order_relaxed);
+            return EngineOutput{-1, 0.0f, 0};
+        }
+
+        // exchange atomically reads haptic_pending and resets it to false in one op
+        const bool trigger = haptic_pending.exchange(false, std::memory_order_relaxed);
 
         return EngineOutput{
-            current_estimated_key,
-            tracked_bpm,
-            trigger
+            current_estimated_key.load(std::memory_order_relaxed),
+            tracked_bpm.load(std::memory_order_relaxed),
+            trigger ? 1 : 0
         };
     }
 };

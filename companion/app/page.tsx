@@ -103,8 +103,7 @@ export default function Home() {
     try {
       setStatus("Requesting Bluetooth Device");
       const selectedDevice = await navigator.bluetooth.requestDevice({
-        filters: [{ namePrefix: "WearingAid" }],
-        optionalServices: [WEARINGAID_SERVICE_UUID],
+        filters: [{ services: [WEARINGAID_SERVICE_UUID] }],
       });
 
       setStatus("Connecting to GATT Server");
@@ -198,9 +197,7 @@ export default function Home() {
       await activeHeartbeatCharacteristic.writeValue(new Uint8Array([1]));
     } catch (error) {
       console.error("Heartbeat failed:", error);
-      if (isLostGattConnectionError(error)) {
-        handleDisconnected();
-      }
+      handleDisconnected();
     } finally {
       writeInFlightRef.current = false;
 

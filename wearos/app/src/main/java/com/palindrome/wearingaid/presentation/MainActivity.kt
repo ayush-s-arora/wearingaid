@@ -2,34 +2,96 @@ package com.palindrome.wearingaid.presentation
 
 import android.Manifest
 import android.annotation.SuppressLint
-import android.bluetooth.BluetoothManager
 import android.content.pm.PackageManager
+import android.graphics.Color as AndroidColor
 import android.os.Build
 import android.os.Bundle
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.viewModels
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.*
-import androidx.compose.runtime.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
+import androidx.wear.compose.foundation.lazy.items
+import androidx.wear.compose.foundation.lazy.rememberScalingLazyListState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.rotary.onRotaryScrollEvent
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.core.content.edit
+import androidx.lifecycle.lifecycleScope
 import androidx.wear.compose.material3.AppScaffold
 import androidx.wear.compose.material3.Button
+import androidx.wear.compose.material3.Icon
 import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.ScreenScaffold
 import androidx.wear.compose.material3.Text
 import androidx.wear.compose.ui.tooling.preview.WearPreviewDevices
-import com.palindrome.wearingaid.presentation.theme.WearingAidTheme
-import java.util.UUID
-import android.widget.Toast
 import com.palindrome.wearingaid.BleServerManager
+import com.palindrome.wearingaid.presentation.icons.check
+import com.palindrome.wearingaid.presentation.icons.downloading
+import com.palindrome.wearingaid.presentation.icons.error
+import com.palindrome.wearingaid.presentation.theme.WearingAidTheme
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
+import kotlin.time.Duration.Companion.milliseconds
 
-private val MUSICAL_KEYS = arrayOf(
+private const val PREFS_NAME = "WearingAidPrefs"
+private const val PREF_GENRE_CODE = "GENRE_CODE"
+private const val PREF_COMPANION_MODE = "COMPANION_MODE"
+private const val OUTPUT_TICK_SECONDS = 0.1f
+
+private data class GenreProfile(
+    val code: Int,
+    val title: String,
+    val subtitle: String
+)
+
+private val GENRE_PROFILES = listOf(
+    GenreProfile(0, "Classical", "Jazz, traditional"),
+    GenreProfile(1, "Band", "Rock, pop, live"),
+    GenreProfile(2, "Electronic", "EDM, house, techno"),
+    GenreProfile(3, "Acoustic", "Folk, solo, traditional"),
+    GenreProfile(4, "Minimal", "Ambient, drone")
+)
+
+private val COMPANION_PAYLOAD_KEYS = arrayOf(
     "C Major", "C Minor", "C# Major", "C# Minor",
     "D Major", "D Minor", "D# Major", "D# Minor",
     "E Major", "E Minor", "F Major", "F Minor",
@@ -38,65 +100,94 @@ private val MUSICAL_KEYS = arrayOf(
     "A# Major", "A# Minor", "B Major", "B Minor"
 )
 
+private val ENGINE_KEYS = arrayOf(
+    "C Major", "C# Major", "D Major", "D# Major", "E Major", "F Major",
+    "F# Major", "G Major", "G# Major", "A Major", "A# Major", "B Major",
+    "C Minor", "C# Minor", "D Minor", "D# Minor", "E Minor", "F Minor",
+    "F# Minor", "G Minor", "G# Minor", "A Minor", "A# Minor", "B Minor"
+)
+
+private val DEFAULT_PALETTE = mapOf(
+    "C Major" to "#FF0000", "C Minor" to "#8B0000",
+    "C# Major" to "#FF4500", "C# Minor" to "#8B2500",
+    "D Major" to "#FFA500", "D Minor" to "#8B5A00",
+    "D# Major" to "#FFD700", "D# Minor" to "#8B7500",
+    "E Major" to "#FFFF00", "E Minor" to "#8B8B00",
+    "F Major" to "#00FF00", "F Minor" to "#006400",
+    "F# Major" to "#00FFFF", "F# Minor" to "#008B8B",
+    "G Major" to "#0000FF", "G Minor" to "#00008B",
+    "G# Major" to "#4B0082", "G# Minor" to "#2E0854",
+    "A Major" to "#8A2BE2", "A Minor" to "#551A8B",
+    "A# Major" to "#FF1493", "A# Minor" to "#8B0A50",
+    "B Major" to "#FF00FF", "B Minor" to "#8B008B"
+)
+
+enum class SyncState {
+    STANDALONE, SYNCING, SYNCED, ERROR
+}
+
 class MainActivity : ComponentActivity() {
 
     private lateinit var bleServerManager: BleServerManager
-    private var deviceId: String = ""
+    private val audioViewModel: AudioViewModel by viewModels()
+
+    private var localDeviceName: String? = null
     private var connectedDeviceName by mutableStateOf<String?>(null)
     private var isPeerConnected by mutableStateOf(false)
-
-    // 1. Reactive State
     private var isBroadcasting by mutableStateOf(false)
+    private var isRecording by mutableStateOf(false)
+    private var syncState by mutableStateOf(SyncState.STANDALONE)
+    private var companionModeEnabled by mutableStateOf(false)
+    private var selectedGenre by mutableStateOf<GenreProfile?>(null)
+    private var activeKeyIndex by mutableIntStateOf(-1)
+    private var estimatedBpm by mutableFloatStateOf(120f)
+    private var vibrationSensitivity by mutableIntStateOf(5)
+    private val palette = mutableStateMapOf<String, String>().apply { putAll(DEFAULT_PALETTE) }
 
-    // 2. Permission Callback
-    private val permissionLauncher = registerForActivityResult(
+    private val blePermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
         val allGranted = permissions.entries.all { it.value }
-        if (allGranted) {
+        if (allGranted && companionModeEnabled) {
             startGattServer()
         } else {
-            isBroadcasting = false // Reset UI if they dismiss or deny
+            isBroadcasting = false
+            syncState = SyncState.ERROR
+        }
+    }
+
+    private val audioPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            startRecording()
+        } else {
+            isRecording = false
+            activeKeyIndex = -1
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val prefs = getSharedPreferences("WearingAidPrefs", MODE_PRIVATE)
-        deviceId = prefs.getString("DEVICE_ID", null) ?: run {
-            val newId = UUID.randomUUID().toString().take(4).uppercase()
-            prefs.edit { putString("DEVICE_ID", newId) }
-            newId
-        }
+        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+        selectedGenre = prefs.getInt(PREF_GENRE_CODE, -1)
+            .takeIf { it in 0..4 }
+            ?.let { code -> GENRE_PROFILES.first { it.code == code } }
+        companionModeEnabled = prefs.getBoolean(PREF_COMPANION_MODE, false)
+        selectedGenre?.let { audioViewModel.setGenre(it.code) }
 
         bleServerManager = BleServerManager(
             this,
             onPacketReceived = { rawPayload ->
-                runOnUiThread {
-                    try {
-                        val parts =
-                            rawPayload.split(",") // rawPayload looks like "5,#FF0000,#8B0000,..."
-                        val sens = parts[0].toInt()
-
-                        val activePalette = mutableMapOf<String, String>()
-                        for (i in MUSICAL_KEYS.indices) {
-                            // +1 because index 0 is the sensitivity value
-                            if (i + 1 < parts.size) {
-                                activePalette[MUSICAL_KEYS[i]] = parts[i + 1]
-                            }
-                        }
-
-                        // Verify
-                        Toast.makeText(
-                            this@MainActivity,
-                            "Sens: $sens | Synced ${activePalette.size} Keys",
-                            Toast.LENGTH_SHORT
-                        ).show()
-
-                    } catch (_: Exception) {
-                        Toast.makeText(this@MainActivity, "Payload Parse Error", Toast.LENGTH_SHORT)
-                            .show()
+                lifecycleScope.launch {
+                    syncState = SyncState.SYNCING
+                    val parsed = parseCompanionPayload(rawPayload)
+                    delay(500.milliseconds)
+                    syncState = when {
+                        parsed && isPeerConnected -> SyncState.SYNCED
+                        parsed -> SyncState.STANDALONE
+                        else -> SyncState.ERROR
                     }
                 }
             },
@@ -104,61 +195,158 @@ class MainActivity : ComponentActivity() {
                 runOnUiThread {
                     isPeerConnected = connected
                     connectedDeviceName = if (connected) name else null
+                    syncState = if (connected) SyncState.SYNCED else SyncState.STANDALONE
                 }
             }
         )
 
         setContent {
             WearingAidApp(
-                deviceId = deviceId,
+                selectedGenre = selectedGenre,
+                companionModeEnabled = companionModeEnabled,
                 isBroadcasting = isBroadcasting,
                 isPeerConnected = isPeerConnected,
+                localDeviceName = localDeviceName,
                 connectedDeviceName = connectedDeviceName,
-                onToggleBroadcast = { toggleBroadcasting() }
+                isRecording = isRecording,
+                syncState = syncState,
+                activeKeyIndex = activeKeyIndex,
+                activeKeyColor = colorForKey(activeKeyIndex),
+                estimatedBpm = estimatedBpm,
+                onGenreSelected = { genre -> selectGenre(genre) },
+                onToggleListening = { toggleRecording() },
+                onToggleCompanionMode = { enabled -> setCompanionMode(enabled) },
+                onEnsureListening = { ensureRecording() },
+                onAudioTick = { readAudioOutput() }
             )
+        }
+
+        if (companionModeEnabled) {
+            ensureBroadcasting()
         }
     }
 
-    private fun toggleBroadcasting() {
-        if (isBroadcasting) {
-            stopGattServer()
+    private fun selectGenre(genre: GenreProfile) {
+        selectedGenre = genre
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit { putInt(PREF_GENRE_CODE, genre.code) }
+        audioViewModel.setGenre(genre.code)
+        ensureRecording()
+    }
+
+    private fun setCompanionMode(enabled: Boolean) {
+        companionModeEnabled = enabled
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit { putBoolean(PREF_COMPANION_MODE, enabled) }
+        if (enabled) {
+            ensureBroadcasting()
         } else {
-            // Determine required permissions based on Android version
-            val requiredPermissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                arrayOf(Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_ADVERTISE)
-            } else {
-                arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
-            }
+            stopGattServer()
+        }
+    }
 
-            // Check if we already have them
-            val allGranted = requiredPermissions.all {
-                ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
-            }
+    private fun ensureRecording() {
+        if (selectedGenre == null || isRecording) return
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            startRecording()
+        } else {
+            audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
 
-            if (allGranted) {
-                startGattServer()
-            } else {
-                // Fire the OS prompt
-                permissionLauncher.launch(requiredPermissions)
-            }
+    private fun toggleRecording() {
+        if (isRecording) {
+            audioViewModel.stopRecording()
+            isRecording = false
+            activeKeyIndex = -1
+        } else {
+            ensureRecording()
+        }
+    }
+
+    private fun startRecording() {
+        audioViewModel.startRecording()
+        isRecording = true
+    }
+
+    private fun ensureBroadcasting() {
+        if (isBroadcasting) return
+        val requiredPermissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            arrayOf(Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_ADVERTISE)
+        } else {
+            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+        }
+
+        val allGranted = requiredPermissions.all {
+            ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
+        }
+
+        if (allGranted) {
+            startGattServer()
+        } else {
+            blePermissionLauncher.launch(requiredPermissions)
         }
     }
 
     @SuppressLint("MissingPermission")
     private fun startGattServer() {
-        val bluetoothManager = getSystemService(BLUETOOTH_SERVICE) as BluetoothManager
-        bluetoothManager.adapter?.name = "WearingAid - $deviceId"
-        val actualName = bluetoothManager.adapter?.name ?: "Unknown"
         bleServerManager.startServer()
+        localDeviceName = bleServerManager.localName
         isBroadcasting = true
-        Toast.makeText(this, "Broadcasting as: $actualName", Toast.LENGTH_LONG).show()
     }
 
     private fun stopGattServer() {
         isPeerConnected = false
         connectedDeviceName = null
         isBroadcasting = false
+        syncState = SyncState.STANDALONE
         bleServerManager.stopServer()
+    }
+
+    private fun readAudioOutput() {
+        if (!isRecording) return
+        val output = audioViewModel.readOutput(OUTPUT_TICK_SECONDS)
+        activeKeyIndex = if (output.keyIndex in 0..ENGINE_KEYS.lastIndex) output.keyIndex else -1
+        estimatedBpm = output.bpm
+        if (output.shouldVibrate) {
+            vibrateForBeat()
+        }
+    }
+
+    private fun parseCompanionPayload(rawPayload: String): Boolean {
+        return try {
+            val parts = rawPayload.split(",")
+            vibrationSensitivity = parts.firstOrNull()?.toInt()?.coerceIn(1, 10) ?: vibrationSensitivity
+            for (i in COMPANION_PAYLOAD_KEYS.indices) {
+                val hex = parts.getOrNull(i + 1)
+                if (!hex.isNullOrBlank()) {
+                    palette[COMPANION_PAYLOAD_KEYS[i]] = hex
+                }
+            }
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun colorForKey(keyIndex: Int): String {
+        val keyName = ENGINE_KEYS.getOrNull(keyIndex) ?: return "#000000"
+        return palette[keyName] ?: DEFAULT_PALETTE[keyName] ?: "#000000"
+    }
+
+    private fun vibrateForBeat() {
+        val durationMs = (12L + vibrationSensitivity * 4L).coerceIn(16L, 52L)
+        val amplitude = (40 + vibrationSensitivity * 20).coerceIn(1, 255)
+        val effect = VibrationEffect.createOneShot(durationMs, amplitude)
+        vibrator().vibrate(effect)
+    }
+
+    private fun vibrator(): Vibrator {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val manager = getSystemService(VibratorManager::class.java)
+            manager.defaultVibrator
+        } else {
+            @Suppress("DEPRECATION")
+            getSystemService(VIBRATOR_SERVICE) as Vibrator
+        }
     }
 
     override fun onDestroy() {
@@ -167,63 +355,95 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-// Extracted UI
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun WearingAidApp(
-    deviceId: String,
+private fun WearingAidApp(
+    selectedGenre: GenreProfile?,
+    companionModeEnabled: Boolean,
     isBroadcasting: Boolean,
     isPeerConnected: Boolean,
+    localDeviceName: String?,
     connectedDeviceName: String?,
-    onToggleBroadcast: () -> Unit
+    isRecording: Boolean,
+    syncState: SyncState,
+    activeKeyIndex: Int,
+    activeKeyColor: String,
+    estimatedBpm: Float,
+    onGenreSelected: (GenreProfile) -> Unit,
+    onToggleListening: () -> Unit,
+    onToggleCompanionMode: (Boolean) -> Unit,
+    onEnsureListening: () -> Unit,
+    onAudioTick: () -> Unit
 ) {
     WearingAidTheme {
         AppScaffold {
             ScreenScaffold(modifier = Modifier.fillMaxSize()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(MaterialTheme.colorScheme.background),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(
-                            text = "WearingAid",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            style = MaterialTheme.typography.titleMedium
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = deviceId,
-                            color = MaterialTheme.colorScheme.onBackground,
-                            style = MaterialTheme.typography.displayLarge,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Spacer(modifier = Modifier.height(2.dp))
+                if (selectedGenre == null) {
+                    GenreSelectionScreen(
+                        selectedGenre = null,
+                        onGenreSelected = onGenreSelected
+                    )
+                } else {
+                    val pagerState = rememberPagerState(pageCount = { 3 })
+                    val pagerScope = rememberCoroutineScope()
+                    val pagerFocusRequester = remember { FocusRequester() }
 
-                        // Dynamic Status Text
-                        Text(
-                            text = when {
-                                isPeerConnected && !connectedDeviceName.isNullOrBlank() -> "Connected to $connectedDeviceName"
-                                isPeerConnected -> "Connected"
-                                isBroadcasting -> "Broadcasting"
-                                else -> "Idle"
-                            },
-                            color = if (isPeerConnected || isBroadcasting) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.labelMedium
-                        )
+                    LaunchedEffect(selectedGenre.code) { onEnsureListening() }
+                    LaunchedEffect(isRecording) {
+                        while (isRecording) {
+                            delay(100.milliseconds)
+                            onAudioTick()
+                        }
+                    }
+                    // Hand focus to the pager box whenever we're NOT on the genre page;
+                    // the genre page's own LaunchedEffect will steal it back when active.
+                    LaunchedEffect(pagerState.currentPage) {
+                        if (pagerState.currentPage != 1) pagerFocusRequester.requestFocus()
+                    }
 
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        // Interaction Button
-                        Button(
-                            onClick = onToggleBroadcast,
-                            modifier = Modifier.fillMaxWidth(0.6f)
-                        ) {
-                            Box(
-                                modifier = Modifier.fillMaxWidth(),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(text = if (isBroadcasting) "Stop" else "Start")
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .focusRequester(pagerFocusRequester)
+                            .onRotaryScrollEvent { event ->
+                                pagerScope.launch {
+                                    val next = if (event.verticalScrollPixels > 0)
+                                        (pagerState.currentPage + 1).coerceAtMost(2)
+                                    else
+                                        (pagerState.currentPage - 1).coerceAtLeast(0)
+                                    pagerState.animateScrollToPage(next)
+                                }
+                                true
+                            }
+                            .focusable()
+                    ) {
+                        HorizontalPager(
+                            state = pagerState,
+                            modifier = Modifier.fillMaxSize()
+                        ) { page ->
+                            when (page) {
+                                0 -> ListeningScreen(
+                                    selectedGenre = selectedGenre,
+                                    isRecording = isRecording,
+                                    activeKeyIndex = activeKeyIndex,
+                                    activeKeyColor = activeKeyColor,
+                                    estimatedBpm = estimatedBpm,
+                                    onToggleListening = onToggleListening
+                                )
+                                1 -> GenreSelectionScreen(
+                                    selectedGenre = selectedGenre,
+                                    onGenreSelected = onGenreSelected,
+                                    isCurrentPage = pagerState.currentPage == 1
+                                )
+                                2 -> SettingsScreen(
+                                    companionModeEnabled = companionModeEnabled,
+                                    isBroadcasting = isBroadcasting,
+                                    isPeerConnected = isPeerConnected,
+                                    localDeviceName = localDeviceName,
+                                    connectedDeviceName = connectedDeviceName,
+                                    syncState = syncState,
+                                    onToggleCompanionMode = onToggleCompanionMode
+                                )
                             }
                         }
                     }
@@ -233,9 +453,273 @@ fun WearingAidApp(
     }
 }
 
-// Preview
+@Composable
+private fun ListeningScreen(
+    selectedGenre: GenreProfile,
+    isRecording: Boolean,
+    activeKeyIndex: Int,
+    activeKeyColor: String,
+    estimatedBpm: Float,
+    onToggleListening: () -> Unit
+) {
+    val hasDetectedKey = isRecording && activeKeyIndex in ENGINE_KEYS.indices
+    val backgroundColor = if (hasDetectedKey) parseHexColor(activeKeyColor) else MaterialTheme.colorScheme.background
+    val foregroundColor = if (hasDetectedKey && backgroundColor.luminanceEstimate() > 0.55f) Color.Black else MaterialTheme.colorScheme.onBackground
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(backgroundColor)
+            .padding(16.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = ">",
+            color = foregroundColor.copy(alpha = 0.65f),
+            modifier = Modifier.align(Alignment.CenterEnd),
+            style = MaterialTheme.typography.titleMedium
+        )
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            if (hasDetectedKey) {
+                Text(
+                    text = ENGINE_KEYS[activeKeyIndex],
+                    color = foregroundColor,
+                    style = MaterialTheme.typography.displayMedium,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center
+                )
+                Text(
+                    text = "${estimatedBpm.roundToInt()} BPM",
+                    color = foregroundColor.copy(alpha = 0.78f),
+                    style = MaterialTheme.typography.labelMedium
+                )
+            } else {
+                Text(
+                    text = if (isRecording) "Listening" else "Paused",
+                    color = foregroundColor,
+                    style = MaterialTheme.typography.displayMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = selectedGenre.title,
+                    color = foregroundColor.copy(alpha = 0.78f),
+                    style = MaterialTheme.typography.labelMedium
+                )
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            Button(
+                onClick = onToggleListening,
+                modifier = Modifier.fillMaxWidth(0.58f)
+            ) {
+                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    Text(text = if (isRecording) "Pause" else "Resume")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GenreSelectionScreen(
+    selectedGenre: GenreProfile?,
+    onGenreSelected: (GenreProfile) -> Unit,
+    isCurrentPage: Boolean = true
+) {
+    val listState = rememberScalingLazyListState()
+    val focusRequester = remember { FocusRequester() }
+    val coroutineScope = rememberCoroutineScope()
+
+    LaunchedEffect(isCurrentPage) {
+        if (isCurrentPage) focusRequester.requestFocus()
+    }
+
+    ScalingLazyColumn(
+        state = listState,
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .focusRequester(focusRequester)
+            .onRotaryScrollEvent { event ->
+                coroutineScope.launch {
+                    listState.scrollBy(event.verticalScrollPixels)
+                }
+                true
+            }
+            .focusable(),
+        contentPadding = PaddingValues(start = 10.dp, top = 32.dp, end = 10.dp, bottom = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+        autoCentering = null,
+    ) {
+        item {
+            Text(
+                text = "Genre",
+                color = MaterialTheme.colorScheme.onBackground,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+        }
+        items(GENRE_PROFILES) { genre ->
+            val isSelected = selectedGenre?.code == genre.code
+            Button(
+                onClick = { onGenreSelected(genre) },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = genre.title,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                        )
+                        Text(
+                            text = genre.subtitle,
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    }
+                    if (isSelected) {
+                        Icon(
+                            imageVector = check,
+                            contentDescription = null,
+                            modifier = Modifier.size(14.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsScreen(
+    companionModeEnabled: Boolean,
+    isBroadcasting: Boolean,
+    isPeerConnected: Boolean,
+    localDeviceName: String?,
+    connectedDeviceName: String?,
+    syncState: SyncState,
+    onToggleCompanionMode: (Boolean) -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .padding(16.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = "<",
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f),
+            modifier = Modifier.align(Alignment.CenterStart),
+            style = MaterialTheme.typography.titleMedium
+        )
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            SyncStatusIcon(syncState = syncState)
+            Text(
+                text = "Settings",
+                color = MaterialTheme.colorScheme.onBackground,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            Button(
+                onClick = { onToggleCompanionMode(!companionModeEnabled) },
+                modifier = Modifier.fillMaxWidth(0.72f)
+            ) {
+                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    Text(text = if (companionModeEnabled) "Companion On" else "Companion Off")
+                }
+            }
+            if (companionModeEnabled) {
+                Spacer(modifier = Modifier.height(10.dp))
+                Text(
+                    text = when {
+                        isPeerConnected && !connectedDeviceName.isNullOrBlank() -> connectedDeviceName
+                        isPeerConnected -> "Connected"
+                        isBroadcasting && !localDeviceName.isNullOrBlank() -> localDeviceName
+                        isBroadcasting -> "Broadcasting"
+                        else -> "Preparing"
+                    },
+                    color = if (isPeerConnected || isBroadcasting) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SyncStatusIcon(syncState: SyncState) {
+    Box(
+        modifier = Modifier
+            .height(20.dp)
+            .fillMaxWidth(),
+        contentAlignment = Alignment.Center
+    ) {
+        when (syncState) {
+            SyncState.STANDALONE -> Spacer(modifier = Modifier.size(18.dp))
+            SyncState.SYNCING -> Icon(
+                imageVector = downloading,
+                contentDescription = "Syncing",
+                tint = MaterialTheme.colorScheme.secondary,
+                modifier = Modifier.size(18.dp)
+            )
+            SyncState.SYNCED -> Icon(
+                imageVector = check,
+                contentDescription = "Synced",
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(18.dp)
+            )
+            SyncState.ERROR -> Icon(
+                imageVector = error,
+                contentDescription = "Sync Error",
+                tint = MaterialTheme.colorScheme.error,
+                modifier = Modifier.size(18.dp)
+            )
+        }
+    }
+}
+
+private fun parseHexColor(hex: String): Color {
+    return try {
+        Color(AndroidColor.parseColor(hex))
+    } catch (_: Exception) {
+        Color.Black
+    }
+}
+
+private fun Color.luminanceEstimate(): Float {
+    return 0.299f * red + 0.587f * green + 0.114f * blue
+}
+
 @WearPreviewDevices
 @Composable
-fun WearingAidAppPreview() {
-    WearingAidApp(deviceId = "A7X2", isBroadcasting = false, isPeerConnected = false, connectedDeviceName = null, onToggleBroadcast = {})
+private fun WearingAidAppPreview() {
+    WearingAidApp(
+        selectedGenre = GENRE_PROFILES[1],
+        companionModeEnabled = true,
+        isBroadcasting = true,
+        isPeerConnected = false,
+        localDeviceName = "Galaxy Watch 6",
+        connectedDeviceName = null,
+        isRecording = true,
+        syncState = SyncState.STANDALONE,
+        activeKeyIndex = -1,
+        activeKeyColor = "#000000",
+        estimatedBpm = 120f,
+        onGenreSelected = {},
+        onToggleListening = {},
+        onToggleCompanionMode = {},
+        onEnsureListening = {},
+        onAudioTick = {}
+    )
 }

@@ -32,6 +32,7 @@ public:
                 ->setFormat(oboe::AudioFormat::Float)
                 ->setChannelCount(1)
                 ->setSampleRate(44100)
+                ->setFramesPerCallback(1024) // matches EXPECTED_FRAME_SIZE in audio_engine.cpp
                 ->setCallback(this); // Tell Oboe to send buffers to onAudioReady()
 
         oboe::Result result = builder.openStream(stream);
@@ -90,6 +91,28 @@ Java_com_palindrome_wearingaid_NativeAudioEngine_tickTempo(JNIEnv *env, jobject 
     // Pass the tick command down to the core engine
     EngineOutput out = engine_tick_tempo(wrapper->core_engine, deltaSec);
     return out.trigger_haptic ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jfloatArray JNICALL
+Java_com_palindrome_wearingaid_NativeAudioEngine_tickOutput(JNIEnv *env, jobject thiz, jlong handle, jfloat deltaSec) {
+    jfloat output[3] = {0.0f, 120.0f, 0.0f};
+    auto* wrapper = reinterpret_cast<OboeEngineWrapper*>(handle);
+    if (wrapper) {
+        EngineOutput out = engine_tick_tempo(wrapper->core_engine, deltaSec);
+        output[0] = static_cast<jfloat>(out.estimated_key_index);
+        output[1] = out.estimated_bpm;
+        output[2] = static_cast<jfloat>(out.trigger_haptic);
+    }
+
+    jfloatArray result = env->NewFloatArray(3);
+    env->SetFloatArrayRegion(result, 0, 3, output);
+    return result;
+}
+
+JNIEXPORT void JNICALL
+Java_com_palindrome_wearingaid_NativeAudioEngine_setGenre(JNIEnv *env, jobject thiz, jlong handle, jint genreCode) {
+    auto* wrapper = reinterpret_cast<OboeEngineWrapper*>(handle);
+    if (wrapper) engine_set_genre(wrapper->core_engine, genreCode);
 }
 
 JNIEXPORT void JNICALL
