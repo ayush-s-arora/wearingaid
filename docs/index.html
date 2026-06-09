@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>WearingAid — A Wearable Approach to Supporting Deaf Musicians in Bands</title>
-<meta name="description" content="A WearOS application that translates the key and tempo of live music into accessible signals for Deaf musicians." />
+<title>WearingAid: A Wearable Approach to Supporting Deaf Musicians in Bands</title>
+<meta name="description" content="A WearOS application for Deaf musicians in live performance scenarios." />
 <style>
   :root {
     --bg: #030712;        /* gray-950 */
@@ -17,7 +17,6 @@
     --muted-2: #6b7280;   /* gray-500 */
     --accent: #3b82f6;    /* blue-500/600 */
     --accent-hover: #60a5fa;
-    --green: #4ade80;
   }
   * { box-sizing: border-box; }
   html { scroll-behavior: smooth; }
@@ -28,9 +27,6 @@
     font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Arial, Helvetica, sans-serif;
     line-height: 1.65;
   }
-  .mono { font-family: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace; }
-
-  /* Layout */
   .wrap { max-width: 900px; margin: 0 auto; padding: 0 24px; }
   header.hero {
     border-bottom: 1px solid var(--border);
@@ -39,41 +35,26 @@
     text-align: center;
   }
   .badge {
-    display: inline-block;
-    font-size: 12px;
-    letter-spacing: .12em;
-    text-transform: uppercase;
-    color: var(--accent-hover);
-    border: 1px solid var(--border-2);
-    border-radius: 999px;
-    padding: 5px 14px;
-    margin-bottom: 22px;
-    font-family: ui-monospace, monospace;
+    display: inline-block; font-size: 12px; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--accent-hover); border: 1px solid var(--border-2); border-radius: 999px;
+    padding: 5px 14px; margin-bottom: 22px; font-family: ui-monospace, monospace;
   }
   h1 {
-    font-size: clamp(30px, 5vw, 46px);
-    font-weight: 800;
-    letter-spacing: -0.02em;
-    margin: 0 0 14px;
+    font-size: clamp(28px, 5vw, 42px); font-weight: 800; letter-spacing: -0.02em; margin: 0 0 14px;
     font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   }
-  .subtitle { color: var(--muted); font-size: clamp(15px, 2.2vw, 19px); max-width: 640px; margin: 0 auto; }
+  .subtitle { color: var(--muted); font-size: clamp(15px, 2.2vw, 18px); max-width: 660px; margin: 0 auto; }
   .pills { margin-top: 26px; display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
   .pill {
-    background: var(--card); border: 1px solid var(--border);
-    border-radius: 10px; padding: 8px 16px; font-size: 13px; color: var(--muted);
-    font-family: ui-monospace, monospace;
+    background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    padding: 8px 16px; font-size: 13px; color: var(--muted); font-family: ui-monospace, monospace;
   }
   .pill b { color: var(--text); }
-
   main { padding: 48px 0 80px; }
   section { margin-bottom: 30px; }
   .card {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 14px;
-    padding: 26px 30px;
-    box-shadow: 0 18px 40px rgba(0,0,0,0.45);
+    background: var(--card); border: 1px solid var(--border); border-radius: 14px;
+    padding: 26px 30px; box-shadow: 0 18px 40px rgba(0,0,0,0.45);
   }
   h2 {
     font-size: 13px; letter-spacing: .14em; text-transform: uppercase;
@@ -87,33 +68,15 @@
   a:hover { text-decoration: underline; }
   strong { color: var(--text); }
   ol, ul { margin: 0 0 14px; padding-left: 22px; color: #d1d5db; }
-  li { margin-bottom: 7px; }
+  li { margin-bottom: 8px; }
   code {
-    font-family: ui-monospace, monospace; font-size: 0.88em;
-    background: var(--card-2); border: 1px solid var(--border);
-    border-radius: 5px; padding: 1px 6px; color: #93c5fd;
+    font-family: ui-monospace, monospace; font-size: 0.88em; background: var(--card-2);
+    border: 1px solid var(--border); border-radius: 5px; padding: 1px 6px; color: #93c5fd;
   }
-  pre {
-    background: var(--card-2); border: 1px solid var(--border); border-radius: 10px;
-    padding: 16px 18px; overflow-x: auto; font-family: ui-monospace, monospace;
-    font-size: 13px; color: var(--muted); line-height: 1.55;
-  }
-  pre code { background: none; border: none; padding: 0; color: inherit; }
-
-  table { width: 100%; border-collapse: collapse; margin: 6px 0 4px; font-size: 14px; }
-  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); }
-  th { color: var(--accent-hover); font-family: ui-monospace, monospace; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
-  td { color: #d1d5db; }
-  tr:last-child td { border-bottom: none; }
-
-  /* Module cards row */
   .modules { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
-  .module {
-    background: var(--card-2); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px;
-  }
+  .module { background: var(--card-2); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; }
   .module .name { font-family: ui-monospace, monospace; color: var(--accent-hover); font-weight: 700; margin-bottom: 6px; }
   .module p { font-size: 14px; margin: 0; color: var(--muted); }
-
   footer { border-top: 1px solid var(--border); padding: 30px 0 50px; text-align: center; color: var(--muted-2); font-size: 13px; }
   .lede { font-size: 16px; color: #e5e7eb; }
 </style>
@@ -121,14 +84,14 @@
 <body>
   <header class="hero">
     <div class="wrap">
-      <span class="badge">WearOS · Edge Audio ML</span>
+      <span class="badge">WearOS</span>
       <h1>WearingAid</h1>
-      <p class="subtitle">A wearable approach to supporting Deaf musicians in bands — translating the <b style="color:#fff">key</b> and <b style="color:#fff">tempo</b> of live music into a color on the wrist and a vibration on the beat.</p>
+      <p class="subtitle">A Wearable Approach to Supporting Deaf Musicians in Bands</p>
       <div class="pills">
         <span class="pill"><b>On-device</b> key detection</span>
-        <span class="pill"><b>Haptic</b> beat tracking</span>
+        <span class="pill"><b>Haptic</b> tempo</span>
         <span class="pill"><b>C++</b> audio engine</span>
-        <span class="pill"><b>BLE</b> companion control</span>
+        <span class="pill"><b>BLE</b> companion</span>
       </div>
     </div>
   </header>
@@ -137,13 +100,12 @@
 
     <section class="card">
       <h2>What</h2>
-      <p class="lede">A WearOS application (with eventual expansion to watchOS) for Deaf musicians in live performance scenarios. WearingAid listens to the surrounding music on the watch's microphone and translates two things a hearing musician relies on — the current key and the tempo — into accessible signals: an on-watch color/label for the key, and a wrist vibration on every beat.</p>
+      <p class="lede">A WearOS (perhaps eventual expansion to watchOS) application for Deaf musicians in live performance scenarios.</p>
     </section>
 
     <section class="card">
       <h2>Why</h2>
-      <p>Bands rely on auditory cues to stay in time with their bandmates and to change keys on time, especially in improvised scenarios like jazz. Members of the Deaf community can struggle to hear their bandmates while performing: substantial ambient noise inhibits audition in many venues, and key changes are harder to interpret due to perceived-loudness discrepancies.</p>
-      <p>This project addresses those challenges with an accessible tool that Deaf band members — irrespective of their instrument — can install for assistance in live music.</p>
+      <p>Bands rely on auditory cues to ensure they stay in time with their bandmates and change keys on time, especially in improvised scenarios like jazz. However, members of the Deaf community likely struggle to hear their bandmates while performing, with substantial ambient noise inhibiting audition in certain venues and the transition between changing keys being more challenging to interpret due to perceived loudness discrepancies. This project seeks to address these challenges by providing an accessible tool that Deaf band members, irrespective of their instrument of choice, can install for assistance in live music scenarios.</p>
     </section>
 
     <section class="card">
@@ -151,21 +113,21 @@
       <div class="modules">
         <div class="module">
           <div class="name">companion/</div>
-          <p>Next.js frontend for companion devices to configure the watch over Bluetooth Low Energy: listening toggle, genre, feature toggles, vibration sensitivity, and per-key RGB color.</p>
+          <p>The Next.js frontend for companion devices to adjust the watch app's configuration: a listener toggle, genre selection, feature toggles for tempo and key tracking, vibration sensitivity, and RGB color selection for individual keys.</p>
         </div>
         <div class="module">
           <div class="name">wearos/</div>
-          <p>WearOS app in Kotlin. Captures mic audio, forwards it to the engine via JNI, renders the UI, drives haptics, and hosts the BLE GATT server. No audio processing here.</p>
+          <p>The WearOS implementation, written in Kotlin, connecting to the C++ audio engine via the Java Native Interface (JNI). No audio processing occurs in this folder.</p>
         </div>
         <div class="module">
           <div class="name">audio-engine/</div>
-          <p>Platform-agnostic C++ engine for key + tempo detection, with a C API in <code>include/audio_engine.h</code>.</p>
+          <p>The C++ logic that powers tempo and key detection. <code>include/audio_engine.h</code> specifies the methods, exported in C for simplicity, that the wearable employs to transmit data to the engine.</p>
         </div>
       </div>
-      <p style="margin-top:18px;">The engine uses two third-party libraries:</p>
+      <p style="margin-top:18px;">The engine utilizes the following third party libraries:</p>
       <ul>
-        <li><strong>Eigen 5.0.0</strong> — efficient matrix/vector math (chroma–key-profile correlation).</li>
-        <li><strong>pffft</strong> — a fork of Julien Pommier's Pretty Fast FFT by Márton Danóczy (<a href="https://github.com/marton78/pffft">github</a>); lightweight, wearable-ready FFTs.</li>
+        <li><strong>Eigen 5.0.0:</strong> Efficient matrix multiplication.</li>
+        <li><strong>pffft:</strong> A fork of Julien Pommier's Pretty Fast FFT (PFFFT) library by Márton Danóczy (<a href="https://github.com/marton78/pffft">github</a>); lightweight, wearable-ready fast fourier transforms.</li>
       </ul>
     </section>
 
@@ -173,60 +135,38 @@
       <h2>Architectural Decisions</h2>
 
       <h3>Why PFFFT?</h3>
-      <p>pffft automatically detects ARM NEON and runs SIMD instructions, and ARM is the predominant architecture in the smartwatch market. For a wearable-first approach it's the natural choice — small, dependency-free, and fast on the exact hardware we target.</p>
+      <p>pffft automatically detects ARM NEON to run instructions with SIMD, and ARM architecture is predominant in the smartwatch market. pffft is the natural choice for a wearable-first approach.</p>
 
       <h3>Why not run inference on the companion?</h3>
       <ol>
-        <li><strong>Companion is recommended, not required.</strong> Requiring inference on the companion would make having one mandatory. WearingAid is wearable-first: it must work standalone on the watch.</li>
-        <li><strong>BLE bandwidth.</strong> BLE's default ~20-byte notification payload (ATT MTU of 23 bytes minus the 3-byte header) makes continuously streaming raw audio and detection results impractical. BLE here carries only small config packets and compact debug telemetry.</li>
-        <li><strong>Power.</strong> Even dropping BLE for a higher-bandwidth transport (e.g. UDP over Wi-Fi), a constant rich stream would tank the battery of most smartwatches — impractical for real-world live-music use.</li>
+        <li><strong>Companion is recommended, not required:</strong> If I required inference to occur on the companion device, having a companion in the first place would be mandatory. I sought to make this application wearable-first.</li>
+        <li><strong>BLE:</strong> the default ~20 byte packet limit (a 23 byte ATT MTU minus a 3 byte header) prevents constant audio/detection result transfer between watch and companion.</li>
+        <li><strong>UDP:</strong> Even if I decided against BLE and employed UDP, the constant stream would tank the battery of most smartwatches. A constant rich stream is impractical for most real-world live-music cases.</li>
       </ol>
 
-      <h3>Why not bundle the audio engine with the WearOS app?</h3>
-      <p>The engine is developed separately for potential future watchOS support. Both frontends can share the same engine, each providing its own platform integration (audio capture, UI, haptics).</p>
+      <h3>Why not bundle the audio engine with the WearOS implementation?</h3>
+      <p>I decided to develop the audio engine separately from the WearOS application for potential future watchOS support. Both applications would employ the same engine in their respective frontend.</p>
 
-      <h3>What optimizations minimize latency?</h3>
+      <h3>What optimizations do you make to minimize latency?</h3>
       <ol>
-        <li><strong>Zero-copy, zero-JNI-overhead audio path.</strong> Mic buffers are handed directly from the Oboe callback into the C++ engine (<code>engine_push_audio</code>) — no per-buffer JNI marshaling or audio work in the Kotlin/Java layer.</li>
-        <li><strong>Low-latency native capture via Google <a href="https://github.com/google/oboe">Oboe</a></strong>, using the <code>Unprocessed</code> input preset so the OS does not apply voice-oriented noise suppression that would destroy musical content.</li>
-        <li><strong>Lock-free cross-thread results</strong> — detection results are published from the audio thread and read from the UI thread through <code>std::atomic</code> values; no locks on the audio path.</li>
-        <li><strong>Pre-allocated DSP resources</strong> — FFT setups and buffers are allocated once and reused every callback.</li>
-        <li><strong>Off-main-thread reads</strong> — the watch reads engine output on a background dispatcher so JNI never blocks the render thread.</li>
+        <li>Microphone buffers are handed straight from the Oboe callback into the C++ engine, so there is no per-buffer JNI marshaling and no audio processing in the Kotlin layer. Detection results are passed back across threads with lock-free atomics, and the FFT setups and buffers are allocated once and reused, so nothing allocates on the audio path.</li>
+        <li>The WearOS application streams provides raw audio to the engine via Google Oboe (<a href="https://github.com/google/oboe">github</a>), which is a C++ library designed for high-performance, low-latency audio applications on Android. It is the newest Android standard for this kind of application.</li>
       </ol>
 
       <h3>How does the audio engine work?</h3>
-      <p><strong>Tempo detection — autocorrelation of an onset envelope.</strong> Each ~23&nbsp;ms frame, the engine computes a <strong>spectral-flux onset strength</strong> (sum of positive frame-to-frame change across FFT magnitude bins), which spikes on note attacks. These fill a ~6-second ring buffer. ~4×/second the engine <strong>autocorrelates</strong> that envelope — the lag at which it best repeats is the beat period. A perceptual tempo preference plus a gentle continuity term resolve metrical-level ambiguity (avoiding double/half-time) and keep the estimate stable. The BPM is EMA-smoothed, and a <strong>phase-locked beat clock</strong> is nudged toward detected onsets so the wrist buzz lands <em>on</em> the beat instead of free-running.</p>
-      <p><strong>Key detection — chroma template matching.</strong> Audio is accumulated into a 4096-point FFT (~10.8&nbsp;Hz/bin) for the resolution needed to separate low semitones. A <strong>Hann window</strong> is applied, then spectral energy is folded into a 12-bin <strong>chromagram</strong> (one bin per pitch class) over the ~100–2000&nbsp;Hz fundamental band — low enough to capture chord roots in the bass, where the tonal center lives. The chromagram is normalized and smoothed with a long (~4.5&nbsp;s) EMA so it reflects the song's <em>global key</em> rather than each passing chord, then correlated (via Eigen) against 24 <strong>key profiles</strong> — major and minor templates circularly shifted to all 12 roots — with the best match taken. A hysteresis stage requires a challenger key to hold a sustained lead before the displayed key switches, suppressing flicker between closely related keys.</p>
-      <p>A silence gate (RMS threshold) and a tonality gate (the chroma must show a real peak, not near-uniform noise) keep the engine from reporting a key or beat when only ambient noise is present.</p>
+      <ol>
+        <li><strong>Tempo:</strong> every frame, the engine computes a spectral flux onset strength (how much the spectrum jumps from one frame to the next, which spikes on note attacks) and buffers it over roughly 6 seconds. Autocorrelating that envelope finds the lag where the beat repeats, which gives the tempo, and a phase-locked clock nudges the wrist vibration onto the beat instead of letting it free-run.</li>
+        <li><strong>Key detection:</strong> audio is run through a 4096 point FFT (Hann windowed) and the energy is folded into a 12 bin chromagram, one bin per pitch class, over the ~100-2000 Hz range where chord roots live. That chroma is smoothed over a few seconds so it reflects the song's key rather than each passing chord, then matched against 24 major and minor key profiles, with the best match winning. A short hold (hysteresis) keeps the displayed key from flickering between closely related keys.</li>
+      </ol>
 
       <h3>What is the impact of genre selection?</h3>
-      <p>Each genre selects a different <strong>key profile</strong> — the template of expected pitch-class weights the chromagram is matched against. Genres differ because traditions emphasize scale degrees differently (electronic music leans hard on tonic and fifth; jazz/classical voicings spread weight across more of the scale), so a genre-tuned profile improves accuracy.</p>
-      <table>
-        <thead><tr><th>Genre (companion)</th><th>Key profile</th></tr></thead>
-        <tbody>
-          <tr><td>Classical (jazz, traditional)</td><td>Temperley</td></tr>
-          <tr><td>Band (rock, pop, live)</td><td>Shaath</td></tr>
-          <tr><td>Electronic (EDM, house, techno)</td><td>EDMA</td></tr>
-          <tr><td>Acoustic (folk, solo, traditional)</td><td>Wei Chai</td></tr>
-          <tr><td>Minimal (ambient, drone)</td><td>Tonic triad</td></tr>
-        </tbody>
-      </table>
-      <p style="margin-top:14px;">The profile approach is inspired by Dr. Emilia Gómez Gutiérrez's doctoral dissertation, <em>Tonal Description of Music Audio Signals</em>, with profile values derived from the Music Technology Group — Universitat Pompeu Fabra's <a href="https://github.com/MTG/essentia/blob/master/src/algorithms/tonal/key.cpp">Essentia</a> library.</p>
-    </section>
-
-    <section class="card">
-      <h2>Repository Layout</h2>
-      <pre><code>companion/      Next.js + TypeScript companion web app (Web Bluetooth)
-wearos/         WearOS app (Kotlin) + JNI bridge + Oboe capture
-audio-engine/   Platform-agnostic C++ engine (key + tempo)
-                C API in include/audio_engine.h
-docs/           GitHub Pages site (this page)</code></pre>
+      <p>Each genre corresponds with a different key profile in the audio engine. The engine matches the detected chroma against the selected profile to identify the key, and they differ because different genres emphasize scale degrees differently (for instance, electronic music leans heavily on the tonic and fifth, while jazz and classical voicings spread weight across more of the scale). Profile-specific implementation inspired by Dr. Emilia G´omez Guti'errez's doctoral dissertation, TONAL DESCRIPTION OF MUSIC AUDIO SIGNALS. Profiles derived from the Music Technology Group - Universitat Pompeu Fabra's Essentia library (<a href="https://github.com/MTG/essentia/blob/master/src/algorithms/tonal/key.cpp">github</a>).</p>
     </section>
 
   </main>
 
   <footer>
-    <div class="wrap">WearingAid — accessible key &amp; tempo for Deaf musicians.</div>
+    <div class="wrap">WearingAid</div>
   </footer>
 </body>
 </html>
