@@ -55,7 +55,7 @@ public:
     oboe::DataCallbackResult onAudioReady(oboe::AudioStream *audioStream, void *audioData, int32_t numFrames) override {
         auto *floatData = static_cast<float *>(audioData);
 
-        // Feed the core engine directly—zero JNI overhead!
+        // Feed the core engine directly. Zero JNI overhead!
         engine_push_audio(core_engine, floatData, numFrames);
 
         return oboe::DataCallbackResult::Continue;
@@ -120,6 +120,12 @@ JNIEXPORT void JNICALL
 Java_com_palindrome_wearingaid_NativeAudioEngine_setGenre(JNIEnv *env, jobject thiz, jlong handle, jint genreCode) {
     auto* wrapper = reinterpret_cast<OboeEngineWrapper*>(handle);
     if (wrapper) engine_set_genre(wrapper->core_engine, genreCode);
+}
+
+JNIEXPORT void JNICALL
+Java_com_palindrome_wearingaid_NativeAudioEngine_setFeatures(JNIEnv *env, jobject thiz, jlong handle, jint features) {
+    auto* wrapper = reinterpret_cast<OboeEngineWrapper*>(handle);
+    if (wrapper) engine_set_features(wrapper->core_engine, static_cast<uint32_t>(features));
 }
 
 JNIEXPORT void JNICALL

@@ -38,9 +38,12 @@ class BleServerManager(
     private val configUuid = UUID.fromString("692580ea-d39f-49f8-bb81-ae799d99de8d")
     private val heartbeatUuid = UUID.fromString("3f2b0ed6-6df7-4f1a-8d77-fc7f2f76d211")
     private val debugUuid = UUID.fromString("b2e7f3c1-9d4a-4f58-a6e0-3c8d12b54e71")
+    private val featuresUuid = UUID.fromString("52b0e5e0-c1a5-4bce-b68b-8a8b41b5ca5c")
     private val cccDescriptorUuid = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
     private var debugCharacteristic: BluetoothGattCharacteristic? = null
+    private var featuresCharacteristic: BluetoothGattCharacteristic? = null
     private val debugSubscribers: MutableSet<BluetoothDevice> = Collections.synchronizedSet(mutableSetOf())
+    private val featureSubscribers: MutableSet<BluetoothDevice> = Collections.synchronizedSet(mutableSetOf())
     private var connectedDevice: BluetoothDevice? = null
     private var lastActivityAt = 0L
     private val connectionWatchdogHandler = Handler(Looper.getMainLooper())
@@ -92,10 +95,23 @@ class BleServerManager(
         debugChar.addDescriptor(cccDescriptor)
         debugCharacteristic = debugChar
 
+        val featuresChar = BluetoothGattCharacteristic(
+            featuresUuid,
+            BluetoothGattCharacteristic.PROPERTY_NOTIFY or BluetoothGattCharacteristic.PROPERTY_READ,
+            BluetoothGattCharacteristic.PERMISSION_READ
+        )
+        val featuresCcc = BluetoothGattDescriptor(
+            cccDescriptorUuid,
+            BluetoothGattDescriptor.PERMISSION_READ or BluetoothGattDescriptor.PERMISSION_WRITE
+        )
+        featuresChar.addDescriptor(featuresCcc)
+        featuresCharacteristic = featuresChar
+
         val service = BluetoothGattService(serviceUuid, BluetoothGattService.SERVICE_TYPE_PRIMARY)
         service.addCharacteristic(configCharacteristic)
         service.addCharacteristic(heartbeatCharacteristic)
         service.addCharacteristic(debugChar)
+        service.addCharacteristic(featuresChar)
         gattServer?.addService(service)
 
         startAdvertising()
@@ -147,6 +163,7 @@ class BleServerManager(
                     connectedDevice = null
                 }
                 debugSubscribers.remove(device)
+                featureSubscribers.remove(device)
                 connectionWatchdogHandler.removeCallbacks(connectionWatchdogRunnable)
                 onConnectionStateChanged(false, null)
             }
@@ -158,14 +175,38 @@ class BleServerManager(
             responseNeeded: Boolean, offset: Int, value: ByteArray
         ) {
             if (descriptor.uuid == cccDescriptorUuid) {
-                if (value.contentEquals(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)) {
-                    debugSubscribers.add(device)
-                } else {
-                    debugSubscribers.remove(device)
+                val enable = value.contentEquals(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
+                val charUuid = descriptor.characteristic.uuid
+                when (charUuid) {
+                    debugUuid -> if (enable) debugSubscribers.add(device) else debugSubscribers.remove(device)
+                    featuresUuid -> if (enable) {
+                        featureSubscribers.add(device)
+                        val char = featuresCharacteristic
+                        val snapshot = char?.value
+                        if (char != null && snapshot != null) {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                gattServer?.notifyCharacteristicChanged(device, char, false, snapshot)
+                            } else {
+                                @Suppress("DEPRECATION")
+                                gattServer?.notifyCharacteristicChanged(device, char, false)
+                            }
+                        }
+                    } else featureSubscribers.remove(device)
                 }
                 if (responseNeeded) {
                     gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
                 }
+            }
+        }
+
+        override fun onCharacteristicReadRequest(
+            device: BluetoothDevice, requestId: Int, offset: Int,
+            characteristic: BluetoothGattCharacteristic
+        ) {
+            if (characteristic.uuid == featuresUuid) {
+                @Suppress("DEPRECATION")
+                val value = characteristic.value ?: "3".toByteArray(Charsets.UTF_8)
+                gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, value)
             }
         }
 
@@ -208,6 +249,25 @@ class BleServerManager(
     }
 
     @SuppressLint("MissingPermission")
+    fun notifyFeatureState(features: Int, genreCode: Int = -1): Boolean {
+        val char = featuresCharacteristic ?: return false
+        val bytes = "$features,$genreCode".toByteArray(Charsets.UTF_8)
+        @Suppress("DEPRECATION")
+        char.value = bytes
+        val snapshot = synchronized(featureSubscribers) { featureSubscribers.toList() }
+        if (snapshot.isEmpty()) return false
+        snapshot.forEach { device ->
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                gattServer?.notifyCharacteristicChanged(device, char, false, bytes)
+            } else {
+                @Suppress("DEPRECATION")
+                gattServer?.notifyCharacteristicChanged(device, char, false)
+            }
+        }
+        return true
+    }
+
+    @SuppressLint("MissingPermission")
     fun sendDebugPacket(payload: String) {
         val char = debugCharacteristic ?: return
         val bytes = payload.toByteArray(Charsets.UTF_8).take(20).toByteArray()
@@ -227,6 +287,7 @@ class BleServerManager(
     fun stopServer() {
         connectionWatchdogHandler.removeCallbacks(connectionWatchdogRunnable)
         debugSubscribers.clear()
+        featureSubscribers.clear()
         connectedDevice?.let { device ->
             gattServer?.cancelConnection(device)
             connectedDevice = null

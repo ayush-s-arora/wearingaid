@@ -15,7 +15,7 @@ private:
     Eigen::MatrixXd log_transition_matrix; 
     Eigen::VectorXd log_viterbi_path;      
     
-    uint32_t active_features;
+    std::atomic<uint32_t> active_features{0};
 
     // Cross-thread values: written by process_audio (Oboe callback thread),
     // read by tick_tempo (Kotlin coroutine thread). std::atomic ensures no torn reads.
@@ -52,7 +52,7 @@ private:
     static constexpr int   MIN_SUSTAINED_FRAMES = 8;   // ~185 ms at 1024/44100; rejects wrist shakes
     static constexpr float SILENCE_THRESHOLD    = 0.05f; // ~-26 dBFS; well below band levels
 
-    // Cached PFFFT resources — allocated once, reused every callback.
+    // Cached PFFFT resources; allocated once, reused every callback.
     static constexpr int EXPECTED_FRAME_SIZE = 1024;
     PFFFT_Setup* fft_setup = nullptr;
     float*       fft_in    = nullptr;
@@ -187,17 +187,17 @@ public:
     }
 
     void set_features(uint32_t features) {
-        active_features = features;
+        active_features.store(features, std::memory_order_relaxed);
     }
 
     void process_audio(const float* pcm_data, int num_samples) {
         if (num_samples != EXPECTED_FRAME_SIZE) return;
 
-        // FFT using cached setup — no allocation on the hot path
+        // FFT using cached setup. No allocation on the hot path
         std::copy(pcm_data, pcm_data + num_samples, fft_in);
         pffft_transform_ordered(fft_setup, fft_in, fft_out, fft_work, PFFFT_FORWARD);
 
-        // RMS — computed before the Viterbi update so the sustain gate can use it
+        // RMS. Computed before the Viterbi update so the sustain gate can use it
         float rms_sq = 0.0f;
         for (int i = 0; i < num_samples; ++i) rms_sq += pcm_data[i] * pcm_data[i];
         const float rms = std::sqrt(rms_sq / num_samples);
@@ -212,7 +212,8 @@ public:
             sustained_frames = 0;
         }
 
-        if (sustained_frames >= MIN_SUSTAINED_FRAMES) {
+        if ((active_features.load(std::memory_order_relaxed) & WEARINGAID_FEATURE_KEY) &&
+            sustained_frames >= MIN_SUSTAINED_FRAMES) {
             Eigen::VectorXf chroma = Eigen::VectorXf::Zero(12);
             for (int i = 1; i < num_samples / 2; ++i) {
                 float re = fft_out[2 * i];
@@ -244,7 +245,7 @@ public:
             current_estimated_key.store(key, std::memory_order_relaxed);
         }
 
-        if (active_features & WEARINGAID_FEATURE_TEMPO) {
+        if (active_features.load(std::memory_order_relaxed) & WEARINGAID_FEATURE_TEMPO) {
             // Adaptive rolling average
             energy_buf_sum -= energy_buf[energy_buf_idx];
             energy_buf[energy_buf_idx] = rms;
@@ -302,11 +303,14 @@ public:
 
         // exchange atomically reads haptic_pending and resets it to false in one op
         const bool trigger = haptic_pending.exchange(false, std::memory_order_relaxed);
+        const uint32_t features = active_features.load(std::memory_order_relaxed);
 
         return EngineOutput{
-            current_estimated_key.load(std::memory_order_relaxed),
+            (features & WEARINGAID_FEATURE_KEY)
+                ? current_estimated_key.load(std::memory_order_relaxed)
+                : -1,
             tracked_bpm.load(std::memory_order_relaxed),
-            trigger ? 1 : 0
+            (features & WEARINGAID_FEATURE_TEMPO) ? (trigger ? 1 : 0) : 0
         };
     }
 };

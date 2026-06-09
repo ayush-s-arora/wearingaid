@@ -7,6 +7,19 @@ const WEARINGAID_SERVICE_UUID = "696afb11-bed7-42cc-b178-dd49bac6c8ef";
 const CONFIG_CHARACTERISTIC_UUID = "692580ea-d39f-49f8-bb81-ae799d99de8d";
 const HEARTBEAT_CHARACTERISTIC_UUID = "3f2b0ed6-6df7-4f1a-8d77-fc7f2f76d211";
 const DEBUG_CHARACTERISTIC_UUID = "b2e7f3c1-9d4a-4f58-a6e0-3c8d12b54e71";
+const FEATURES_CHARACTERISTIC_UUID = "52b0e5e0-c1a5-4bce-b68b-8a8b41b5ca5c";
+
+const FEATURE_KEY = 1;
+const FEATURE_TEMPO = 2;
+const FEATURE_LISTENING = 4;
+
+const GENRE_PROFILES = [
+  { code: 0, title: "Classical", subtitle: "Jazz, traditional" },
+  { code: 1, title: "Band", subtitle: "Rock, pop, live" },
+  { code: 2, title: "Electronic", subtitle: "EDM, house, techno" },
+  { code: 3, title: "Acoustic", subtitle: "Folk, solo, traditional" },
+  { code: 4, title: "Minimal", subtitle: "Ambient, drone" },
+];
 
 const ENGINE_KEYS = [
   "C Maj","C# Maj","D Maj","D# Maj","E Maj","F Maj",
@@ -50,12 +63,22 @@ export default function Home() {
   const [heartbeatCharacteristic, setHeartbeatCharacteristic] = useState<BluetoothRemoteGATTCharacteristic | null>(null);
   const [debugMode, setDebugMode] = useState(false);
   const [debugLogs, setDebugLogs] = useState<string[]>([]);
+  const [featuresEnabled, setFeaturesEnabled] = useState(FEATURE_KEY | FEATURE_TEMPO);
+  const featuresRef = useRef(FEATURE_KEY | FEATURE_TEMPO);
+  const [isListening, setIsListening] = useState(false);
+  const isListeningRef = useRef(false);
+  const [selectedGenre, setSelectedGenre] = useState(-1);
+  const genreRef = useRef(-1);
+  const featuresCharacteristicRef = useRef<BluetoothRemoteGATTCharacteristic | null>(null);
+  const featuresHandlerRef = useRef<((e: Event) => void) | null>(null);
   const deviceRef = useRef<BluetoothDevice | null>(null);
   const characteristicRef = useRef<BluetoothRemoteGATTCharacteristic | null>(null);
   const heartbeatCharacteristicRef = useRef<BluetoothRemoteGATTCharacteristic | null>(null);
   const debugCharacteristicRef = useRef<BluetoothRemoteGATTCharacteristic | null>(null);
   const debugHandlerRef = useRef<((e: Event) => void) | null>(null);
-  const pendingWriteRef = useRef<{ newSens: number; newPalette: Record<string, string> } | null>(null);
+  const logContainerRef = useRef<HTMLDivElement>(null);
+  const lastSentRef = useRef<{ newSens: number; newPalette: Record<string, string>; newFeatures: number; newGenre: number } | null>(null);
+  const pendingWriteRef = useRef<{ newSens: number; newPalette: Record<string, string>; newFeatures: number; newGenre: number } | null>(null);
   const writeInFlightRef = useRef(false);
 
   const initialPalette: Record<string, string> = {
@@ -86,6 +109,19 @@ export default function Home() {
     heartbeatCharacteristicRef.current = heartbeatCharacteristic;
   }, [heartbeatCharacteristic]);
 
+  useEffect(() => {
+    featuresRef.current = featuresEnabled;
+  }, [featuresEnabled]);
+
+  useEffect(() => {
+    genreRef.current = selectedGenre;
+  }, [selectedGenre]);
+
+  useEffect(() => {
+    const el = logContainerRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [debugLogs]);
+
   const handleDisconnected = () => {
     const debugChar = debugCharacteristicRef.current;
     const handler = debugHandlerRef.current;
@@ -95,8 +131,23 @@ export default function Home() {
     }
     debugCharacteristicRef.current = null;
     debugHandlerRef.current = null;
+    const featuresChar = featuresCharacteristicRef.current;
+    const featuresHandler = featuresHandlerRef.current;
+    if (featuresChar && featuresHandler) {
+      featuresChar.removeEventListener("characteristicvaluechanged", featuresHandler);
+      featuresChar.stopNotifications().catch(() => {});
+    }
+    featuresCharacteristicRef.current = null;
+    featuresHandlerRef.current = null;
+    setFeaturesEnabled(FEATURE_KEY | FEATURE_TEMPO);
+    featuresRef.current = FEATURE_KEY | FEATURE_TEMPO;
+    setIsListening(false);
+    isListeningRef.current = false;
+    setSelectedGenre(-1);
+    genreRef.current = -1;
     pendingWriteRef.current = null;
     writeInFlightRef.current = false;
+    lastSentRef.current = null;
     setDebugMode(false);
     setDebugLogs([]);
     setDevice(null);
@@ -128,6 +179,12 @@ export default function Home() {
         filters: [{ services: [WEARINGAID_SERVICE_UUID] }],
       });
 
+      // Force a fresh GATT session. Chrome reuses stale connections for paired devices
+      if (selectedDevice.gatt?.connected) {
+        selectedDevice.gatt.disconnect();
+        await new Promise<void>(r => setTimeout(r, 300));
+      }
+
       setStatus("Connecting to GATT Server");
       const server = await selectedDevice.gatt?.connect();
 
@@ -140,6 +197,48 @@ export default function Home() {
       const debugChar = await service?.getCharacteristic(DEBUG_CHARACTERISTIC_UUID).catch(() => null);
       debugCharacteristicRef.current = debugChar ?? null;
 
+      const featuresChar = await service?.getCharacteristic(FEATURES_CHARACTERISTIC_UUID).catch(() => null);
+      if (featuresChar) {
+        featuresCharacteristicRef.current = featuresChar;
+
+        const applyFeaturesValue = (value: DataView) => {
+          const parts = new TextDecoder().decode(value).split(",");
+          const bits = parseInt(parts[0]);
+          if (!isNaN(bits)) {
+            setFeaturesEnabled(bits & ~FEATURE_LISTENING);
+            featuresRef.current = bits & ~FEATURE_LISTENING;
+            const listening = (bits & FEATURE_LISTENING) !== 0;
+            setIsListening(listening);
+            isListeningRef.current = listening;
+            const genre = parseInt(parts[1] ?? "-1");
+            if (!isNaN(genre) && genre >= 0 && genre <= 4) {
+              setSelectedGenre(genre);
+              genreRef.current = genre;
+            }
+            const ts = new Date().toLocaleTimeString();
+            const genreTitle = genre >= 0 && genre <= 4 ? GENRE_PROFILES[genre]?.title : "–";
+            const featStr = [(bits & FEATURE_KEY ? "Key" : ""), (bits & FEATURE_TEMPO ? "Tempo" : "")].filter(Boolean).join("+") || "none";
+            setDebugLogs(prev => [...prev, `[${ts}] WATCH  ${listening ? "▶ listening" : "⏸ paused"} · ${featStr} · ${genreTitle}`].slice(-200));
+          }
+        };
+
+        const handler = (e: Event) => {
+          const value = (e.target as BluetoothRemoteGATTCharacteristic).value;
+          if (!value) return;
+          applyFeaturesValue(value);
+        };
+        featuresHandlerRef.current = handler;
+        try {
+          await featuresChar.startNotifications();
+          featuresChar.addEventListener("characteristicvaluechanged", handler);
+          // Explicit read guarantees initial state even when push-on-subscribe didn't fire
+          const currentValue = await featuresChar.readValue();
+          applyFeaturesValue(currentValue);
+        } catch (e) {
+          console.error("Failed to subscribe to features characteristic:", e);
+        }
+      }
+
       if (!configChar || !heartbeatChar) {
         setStatus("Connection failed: characteristic not found.");
         selectedDevice.gatt?.disconnect();
@@ -149,6 +248,8 @@ export default function Home() {
       setIsConnected(true);
       setConnectedDeviceName(selectedDevice.name ?? null);
       setStatus(`Connected to ${selectedDevice.name ?? "Watch"}`);
+      const ts = new Date().toLocaleTimeString();
+      setDebugLogs(prev => [...prev, `[${ts}] CONN   paired with ${selectedDevice.name ?? "Watch"}`].slice(-200));
       setDevice(selectedDevice);
       setCharacteristic(configChar);
       setHeartbeatCharacteristic(heartbeatChar);
@@ -187,10 +288,29 @@ export default function Home() {
 
     try {
       const colorValues = Object.values(pending.newPalette);
-      const payload = `${pending.newSens},${colorValues.join(',')}`;
+      const payload = `${pending.newFeatures},${pending.newSens},${pending.newGenre},${colorValues.join(',')}`;
       const encoded = new TextEncoder().encode(payload);
       await activeCharacteristic.writeValue(toArrayBuffer(encoded));
-      console.log("Config packet sent");
+      const ts = new Date().toLocaleTimeString();
+      const prev = lastSentRef.current;
+      const changes: string[] = [];
+      if (!prev || prev.newFeatures !== pending.newFeatures) {
+        changes.push(`listen:${(pending.newFeatures & FEATURE_LISTENING) ? "on" : "off"} key:${(pending.newFeatures & FEATURE_KEY) ? "on" : "off"} tempo:${(pending.newFeatures & FEATURE_TEMPO) ? "on" : "off"}`);
+      }
+      if (!prev || prev.newSens !== pending.newSens) changes.push(`sens:${pending.newSens}`);
+      if (!prev || prev.newGenre !== pending.newGenre) {
+        const g = GENRE_PROFILES.find(p => p.code === pending.newGenre);
+        changes.push(`genre:${g?.title ?? "–"}`);
+      }
+      if (prev) {
+        Object.entries(pending.newPalette).forEach(([key, val]) => {
+          if (prev.newPalette[key] !== val) changes.push(`${key}:${val}`);
+        });
+      } else {
+        changes.push("(initial)");
+      }
+      lastSentRef.current = { ...pending, newPalette: { ...pending.newPalette } };
+      setDebugLogs(prev2 => [...prev2, `[${ts}] SENT   ${changes.join(" · ") || "–"}`].slice(-200));
     } catch (error) {
       console.error("Failed to send packet:", error);
       if (isLostGattConnectionError(error)) {
@@ -258,7 +378,7 @@ export default function Home() {
         const rms = parts["r"] ?? "?";
         const keyName = keyIdx >= 0 && keyIdx < ENGINE_KEYS.length ? ENGINE_KEYS[keyIdx] : "Silence";
         const ts = new Date().toLocaleTimeString();
-        setDebugLogs(prev => [`[${ts}] ${keyName} | ${bpm} BPM | RMS ${rms}`, ...prev].slice(0, 100));
+        setDebugLogs(prev => [...prev, `[${ts}] AUDIO  ${keyName} · ${bpm} BPM · RMS ${rms}`].slice(-200));
       };
       debugHandlerRef.current = handler;
       try {
@@ -278,12 +398,45 @@ export default function Home() {
     }
   };
 
-  const queueConfigPacket = (newSens: number, newPalette: Record<string, string>) => {
+  const queueConfigPacket = (newSens: number, newPalette: Record<string, string>, newFeatures?: number, newGenre?: number) => {
     setSensitivity(newSens);
     setPalette(newPalette);
+    if (newFeatures !== undefined) {
+      setFeaturesEnabled(newFeatures & ~FEATURE_LISTENING);
+      featuresRef.current = newFeatures & ~FEATURE_LISTENING;
+    }
 
-    pendingWriteRef.current = { newSens, newPalette };
+    const baseFeatures = (newFeatures ?? featuresRef.current) & ~FEATURE_LISTENING;
+    pendingWriteRef.current = {
+      newSens,
+      newPalette,
+      newFeatures: baseFeatures | (isListeningRef.current ? FEATURE_LISTENING : 0),
+      newGenre: newGenre ?? genreRef.current,
+    };
     void flushPendingWrite();
+  };
+
+  const toggleListeningOnCompanion = () => {
+    const next = !isListeningRef.current;
+    setIsListening(next);
+    isListeningRef.current = next;
+    pendingWriteRef.current = {
+      newSens: sensitivity,
+      newPalette: palette,
+      newFeatures: featuresRef.current | (next ? FEATURE_LISTENING : 0),
+      newGenre: genreRef.current,
+    };
+    void flushPendingWrite();
+  };
+
+  const selectGenreOnCompanion = (code: number) => {
+    setSelectedGenre(code);
+    genreRef.current = code;
+    queueConfigPacket(sensitivity, palette, undefined, code);
+  };
+
+  const toggleFeatureOnCompanion = (featureBit: number) => {
+    queueConfigPacket(sensitivity, palette, featuresRef.current ^ featureBit);
   };
 
   const handleColorChange = (keyName: string, newHex: string) => {
@@ -313,32 +466,88 @@ export default function Home() {
             </button>
           ) : (
             <div className="w-full flex flex-col gap-4">
-              <label className="flex flex-col gap-2">
-                <span className="text-gray-300">Vibration Sensitivity: {sensitivity}</span>
-                <input
-                  type="range" min="1" max="10" value={sensitivity}
-                  onChange={(e) => queueConfigPacket(Number(e.target.value), palette)}
-                  className="w-full accent-blue-500"
-                />
-              </label>
+              <div className="flex items-center justify-between">
+                <span className="text-gray-300 font-semibold">Listening</span>
+                <div className="flex rounded overflow-hidden border border-gray-600 text-xs font-semibold">
+                  <button
+                    onClick={() => { if (!isListening) toggleListeningOnCompanion(); }}
+                    className={`px-3 py-1 transition-colors ${isListening ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-400 hover:bg-gray-700"}`}
+                  >On</button>
+                  <button
+                    onClick={() => { if (isListening) toggleListeningOnCompanion(); }}
+                    className={`px-3 py-1 transition-colors ${!isListening ? "bg-gray-600 text-white" : "bg-gray-800 text-gray-400 hover:bg-gray-700"}`}
+                  >Off</button>
+                </div>
+              </div>
 
-              <div className="w-full flex flex-col gap-4 mt-6">
-                <span className="text-gray-300 font-semibold border-b border-gray-700 pb-2">
-                  Musical Key Palette (24 Channels)
-                </span>
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-3 max-h-96 overflow-y-auto p-2 bg-gray-950 rounded-lg border border-gray-800">
-                  {Object.entries(palette).map(([keyName, hexColor]) => (
-                    <label key={keyName} className="flex items-center justify-between gap-2 bg-gray-900 p-2 rounded border border-gray-700">
-                      <span className="text-gray-300 text-xs font-medium truncate w-full">{keyName}</span>
-                      <input
-                        type="color" value={hexColor}
-                        onChange={(e) => handleColorChange(keyName, e.target.value)}
-                        className="w-6 h-6 rounded cursor-pointer bg-transparent border-0 p-0 flex-shrink-0"
-                      />
-                    </label>
+              <div className="w-full flex flex-col gap-2">
+                <span className="text-gray-300 font-semibold">Genre</span>
+                <div className="flex flex-col gap-1">
+                  {GENRE_PROFILES.map((g) => (
+                    <button
+                      key={g.code}
+                      onClick={() => selectGenreOnCompanion(g.code)}
+                      className={`flex items-center justify-between px-3 py-2 rounded border transition-colors text-left ${
+                        selectedGenre === g.code
+                          ? "bg-blue-600/30 border-blue-500 text-blue-200"
+                          : "bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700"
+                      }`}
+                    >
+                      <span className="font-medium text-sm">{g.title}</span>
+                      <span className="text-xs text-gray-400">{g.subtitle}</span>
+                    </button>
                   ))}
                 </div>
               </div>
+
+              <label className="flex items-center gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={(featuresEnabled & FEATURE_TEMPO) !== 0}
+                  onChange={() => toggleFeatureOnCompanion(FEATURE_TEMPO)}
+                  className="w-4 h-4 accent-blue-500"
+                />
+                <span className="text-gray-300 font-semibold">Tempo Tracking</span>
+              </label>
+              {(featuresEnabled & FEATURE_TEMPO) !== 0 && (
+                <label className="flex flex-col gap-2">
+                  <span className="text-gray-300">Vibration Sensitivity: {sensitivity}</span>
+                  <input
+                    type="range" min="1" max="10" value={sensitivity}
+                    onChange={(e) => queueConfigPacket(Number(e.target.value), palette)}
+                    className="w-full accent-blue-500"
+                  />
+                </label>
+              )}
+
+              <label className="flex items-center gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={(featuresEnabled & FEATURE_KEY) !== 0}
+                  onChange={() => toggleFeatureOnCompanion(FEATURE_KEY)}
+                  className="w-4 h-4 accent-blue-500"
+                />
+                <span className="text-gray-300 font-semibold">Key Detection</span>
+              </label>
+              {(featuresEnabled & FEATURE_KEY) !== 0 && (
+                <div className="w-full flex flex-col gap-4">
+                  <span className="text-gray-300 font-semibold border-b border-gray-700 pb-2">
+                    Musical Key Palette (24 Channels)
+                  </span>
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-3 max-h-96 overflow-y-auto p-2 bg-gray-950 rounded-lg border border-gray-800">
+                    {Object.entries(palette).map(([keyName, hexColor]) => (
+                      <label key={keyName} className="flex items-center justify-between gap-2 bg-gray-900 p-2 rounded border border-gray-700">
+                        <span className="text-gray-300 text-xs font-medium truncate w-full">{keyName}</span>
+                        <input
+                          type="color" value={hexColor}
+                          onChange={(e) => handleColorChange(keyName, e.target.value)}
+                          className="w-6 h-6 rounded cursor-pointer bg-transparent border-0 p-0 flex-shrink-0"
+                        />
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               <button
                 onClick={() => void toggleDebugMode()}
@@ -348,23 +557,24 @@ export default function Home() {
                     : "bg-gray-800 hover:bg-gray-700 text-gray-300 border-gray-600"
                 }`}
               >
-                {debugMode ? "Debug: On" : "Debug: Off"}
+                {debugMode ? "Audio Debug: On" : "Audio Debug: Off"}
               </button>
 
-              {debugMode && (
-                <div className="w-full flex flex-col gap-2 mt-2">
-                  <span className="text-gray-400 text-xs font-semibold border-b border-gray-700 pb-1">
-                    Debug Log (live from watch)
-                  </span>
-                  <div className="bg-gray-950 rounded border border-gray-800 p-2 h-48 overflow-y-auto font-mono text-xs text-green-400 flex flex-col gap-0.5">
-                    {debugLogs.length === 0 ? (
-                      <span className="text-gray-600">Waiting for packets…</span>
-                    ) : (
-                      debugLogs.map((line, i) => <span key={i}>{line}</span>)
-                    )}
-                  </div>
+              <div className="w-full flex flex-col gap-2 mt-2">
+                <span className="text-gray-400 text-xs font-semibold border-b border-gray-700 pb-1">
+                  Activity Log
+                </span>
+                <div
+                  ref={logContainerRef}
+                  className="bg-gray-950 rounded border border-gray-800 p-2 h-48 overflow-y-auto font-mono text-xs text-green-400 flex flex-col gap-0.5"
+                >
+                  {debugLogs.length === 0 ? (
+                    <span className="text-gray-600">No activity yet…</span>
+                  ) : (
+                    debugLogs.map((line, i) => <span key={i}>{line}</span>)
+                  )}
                 </div>
-              )}
+              </div>
 
               <button
                 onClick={() => device.gatt?.disconnect()}

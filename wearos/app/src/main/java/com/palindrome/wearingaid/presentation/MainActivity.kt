@@ -62,19 +62,30 @@ import androidx.wear.compose.material3.ScreenScaffold
 import androidx.wear.compose.material3.Text
 import androidx.wear.compose.ui.tooling.preview.WearPreviewDevices
 import com.palindrome.wearingaid.BleServerManager
+import com.palindrome.wearingaid.presentation.icons.arrow_left
+import com.palindrome.wearingaid.presentation.icons.arrow_right
+import com.palindrome.wearingaid.presentation.icons.arrow_upload_progress
 import com.palindrome.wearingaid.presentation.icons.check
 import com.palindrome.wearingaid.presentation.icons.downloading
 import com.palindrome.wearingaid.presentation.icons.error
 import com.palindrome.wearingaid.presentation.theme.WearingAidTheme
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 import kotlin.time.Duration.Companion.milliseconds
 
 private const val PREFS_NAME = "WearingAidPrefs"
 private const val PREF_GENRE_CODE = "GENRE_CODE"
 private const val PREF_COMPANION_MODE = "COMPANION_MODE"
+private const val PREF_FEATURES = "FEATURES"
 private const val OUTPUT_TICK_SECONDS = 0.1f
+
+private const val FEATURE_KEY = 1
+private const val FEATURE_TEMPO = 2
+private const val FEATURE_LISTENING = 4
+private const val DEFAULT_FEATURES = FEATURE_KEY or FEATURE_TEMPO
 
 private data class GenreProfile(
     val code: Int,
@@ -122,7 +133,7 @@ private val DEFAULT_PALETTE = mapOf(
 )
 
 enum class SyncState {
-    STANDALONE, SYNCING, SYNCED, ERROR
+    STANDALONE, SYNCING, UPLOADING, SYNCED, ERROR
 }
 
 class MainActivity : ComponentActivity() {
@@ -136,6 +147,7 @@ class MainActivity : ComponentActivity() {
     private var isBroadcasting by mutableStateOf(false)
     private var isRecording by mutableStateOf(false)
     private var debugMode by mutableStateOf(false)
+    private var featuresEnabled by mutableIntStateOf(DEFAULT_FEATURES)
     private var syncState by mutableStateOf(SyncState.STANDALONE)
     private var companionModeEnabled by mutableStateOf(false)
     private var selectedGenre by mutableStateOf<GenreProfile?>(null)
@@ -143,6 +155,16 @@ class MainActivity : ComponentActivity() {
     private var estimatedBpm by mutableFloatStateOf(120f)
     private var vibrationSensitivity by mutableIntStateOf(5)
     private val palette = mutableStateMapOf<String, String>().apply { putAll(DEFAULT_PALETTE) }
+
+    private val vibrator: Vibrator by lazy {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val manager = getSystemService(VibratorManager::class.java)
+            manager.defaultVibrator
+        } else {
+            @Suppress("DEPRECATION")
+            getSystemService(VIBRATOR_SERVICE) as Vibrator
+        }
+    }
 
     private val blePermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -175,15 +197,17 @@ class MainActivity : ComponentActivity() {
             .takeIf { it in 0..4 }
             ?.let { code -> GENRE_PROFILES.first { it.code == code } }
         companionModeEnabled = prefs.getBoolean(PREF_COMPANION_MODE, false)
+        featuresEnabled = prefs.getInt(PREF_FEATURES, DEFAULT_FEATURES)
         selectedGenre?.let { audioViewModel.setGenre(it.code) }
+        audioViewModel.setFeatures(featuresEnabled)
 
         bleServerManager = BleServerManager(
             this,
             onPacketReceived = { rawPayload ->
                 lifecycleScope.launch {
                     syncState = SyncState.SYNCING
+                    delay(150.milliseconds)
                     val parsed = parseCompanionPayload(rawPayload)
-                    delay(500.milliseconds)
                     syncState = when {
                         parsed && isPeerConnected -> SyncState.SYNCED
                         parsed -> SyncState.STANDALONE
@@ -196,6 +220,7 @@ class MainActivity : ComponentActivity() {
                     isPeerConnected = connected
                     connectedDeviceName = if (connected) name else null
                     syncState = if (connected) SyncState.SYNCED else SyncState.STANDALONE
+                    if (connected) bleServerManager.notifyFeatureState(featuresEnabled or (if (isRecording) FEATURE_LISTENING else 0), selectedGenre?.code ?: -1)
                 }
             }
         )
@@ -211,14 +236,15 @@ class MainActivity : ComponentActivity() {
                 isRecording = isRecording,
                 debugMode = debugMode,
                 syncState = syncState,
-                activeKeyIndex = activeKeyIndex,
-                activeKeyColor = colorForKey(activeKeyIndex),
-                estimatedBpm = estimatedBpm,
+                activeKeyIndex = { activeKeyIndex },
+                activeKeyColor = { colorForKey(activeKeyIndex) },
+                estimatedBpm = { estimatedBpm },
                 onGenreSelected = { genre -> selectGenre(genre) },
+                featuresEnabled = featuresEnabled,
                 onToggleListening = { toggleRecording() },
                 onToggleCompanionMode = { enabled -> setCompanionMode(enabled) },
                 onToggleDebugMode = { debugMode = !debugMode },
-                onEnsureListening = { ensureRecording() },
+                onToggleFeature = { bit -> toggleFeature(bit) },
                 onAudioTick = { readAudioOutput() },
                 onDebugTick = { sendDebugPacket() }
             )
@@ -233,7 +259,20 @@ class MainActivity : ComponentActivity() {
         selectedGenre = genre
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit { putInt(PREF_GENRE_CODE, genre.code) }
         audioViewModel.setGenre(genre.code)
-        ensureRecording()
+        if (isPeerConnected) {
+            syncState = SyncState.UPLOADING
+            lifecycleScope.launch {
+                val sent = bleServerManager.notifyFeatureState(featuresEnabled or (if (isRecording) FEATURE_LISTENING else 0), genre.code)
+                delay(150.milliseconds)
+                syncState = if (sent) SyncState.SYNCED else SyncState.ERROR
+            }
+        }
+    }
+
+    private fun applyGenreFromCompanion(genre: GenreProfile) {
+        selectedGenre = genre
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit { putInt(PREF_GENRE_CODE, genre.code) }
+        audioViewModel.setGenre(genre.code)
     }
 
     private fun setCompanionMode(enabled: Boolean) {
@@ -261,6 +300,7 @@ class MainActivity : ComponentActivity() {
             isRecording = false
             activeKeyIndex = -1
             window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            notifyListeningState()
         } else {
             ensureRecording()
         }
@@ -270,6 +310,20 @@ class MainActivity : ComponentActivity() {
         audioViewModel.startRecording()
         isRecording = true
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        notifyListeningState()
+    }
+
+    private fun notifyListeningState() {
+        if (!isPeerConnected) return
+        syncState = SyncState.UPLOADING
+        lifecycleScope.launch {
+            val sent = bleServerManager.notifyFeatureState(
+                featuresEnabled or (if (isRecording) FEATURE_LISTENING else 0),
+                selectedGenre?.code ?: -1
+            )
+            delay(150.milliseconds)
+            syncState = if (sent) SyncState.SYNCED else SyncState.ERROR
+        }
     }
 
     private fun ensureBroadcasting() {
@@ -306,14 +360,38 @@ class MainActivity : ComponentActivity() {
         bleServerManager.stopServer()
     }
 
-    private fun readAudioOutput() {
+    private suspend fun readAudioOutput() {
         if (!isRecording) return
-        val output = audioViewModel.readOutput(OUTPUT_TICK_SECONDS)
+        val output = withContext(Dispatchers.Default) {
+            audioViewModel.readOutput(OUTPUT_TICK_SECONDS)
+        }
         activeKeyIndex = if (output.keyIndex in 0..ENGINE_KEYS.lastIndex) output.keyIndex else -1
         estimatedBpm = output.bpm
         if (output.shouldVibrate) {
             vibrateForBeat()
         }
+    }
+
+    private fun toggleFeature(featureBit: Int) {
+        val newFeatures = featuresEnabled xor featureBit
+        featuresEnabled = newFeatures
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit { putInt(PREF_FEATURES, newFeatures) }
+        audioViewModel.setFeatures(newFeatures)
+        if (isPeerConnected) {
+            syncState = SyncState.UPLOADING
+            lifecycleScope.launch {
+                val sent = bleServerManager.notifyFeatureState(newFeatures or (if (isRecording) FEATURE_LISTENING else 0), selectedGenre?.code ?: -1)
+                delay(150.milliseconds)
+                syncState = if (sent) SyncState.SYNCED else SyncState.ERROR
+            }
+        }
+    }
+
+    private fun applyFeaturesFromCompanion(newFeatures: Int) {
+        featuresEnabled = newFeatures
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit { putInt(PREF_FEATURES, newFeatures) }
+        audioViewModel.setFeatures(newFeatures)
+        // Don't notify companion back; it sent these values, would cause a loop
     }
 
     private fun sendDebugPacket() {
@@ -324,12 +402,21 @@ class MainActivity : ComponentActivity() {
     private fun parseCompanionPayload(rawPayload: String): Boolean {
         return try {
             val parts = rawPayload.split(",")
-            vibrationSensitivity = parts.firstOrNull()?.toInt()?.coerceIn(1, 10) ?: vibrationSensitivity
+            // Format: features,sensitivity,genre,color0,...,color23
+            val rawFeatures = parts.getOrNull(0)?.toIntOrNull()
+            val newFeatures = rawFeatures?.and(0x3)
+            val listenRequested = rawFeatures?.and(FEATURE_LISTENING)?.let { it != 0 }
+            vibrationSensitivity = parts.getOrNull(1)?.toInt()?.coerceIn(1, 10) ?: vibrationSensitivity
+            val newGenreCode = parts.getOrNull(2)?.toIntOrNull()?.takeIf { it in 0..4 }
             for (i in COMPANION_PAYLOAD_KEYS.indices) {
-                val hex = parts.getOrNull(i + 1)
-                if (!hex.isNullOrBlank()) {
-                    palette[COMPANION_PAYLOAD_KEYS[i]] = hex
-                }
+                val hex = parts.getOrNull(i + 3)
+                if (!hex.isNullOrBlank()) palette[COMPANION_PAYLOAD_KEYS[i]] = hex
+            }
+            if (newFeatures != null) applyFeaturesFromCompanion(newFeatures)
+            if (listenRequested != null && listenRequested != isRecording) toggleRecording()
+            if (newGenreCode != null) {
+                val genre = GENRE_PROFILES.firstOrNull { it.code == newGenreCode }
+                if (genre != null) applyGenreFromCompanion(genre)
             }
             true
         } catch (_: Exception) {
@@ -346,17 +433,7 @@ class MainActivity : ComponentActivity() {
         val durationMs = (12L + vibrationSensitivity * 4L).coerceIn(16L, 52L)
         val amplitude = (40 + vibrationSensitivity * 20).coerceIn(1, 255)
         val effect = VibrationEffect.createOneShot(durationMs, amplitude)
-        vibrator().vibrate(effect)
-    }
-
-    private fun vibrator(): Vibrator {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            val manager = getSystemService(VibratorManager::class.java)
-            manager.defaultVibrator
-        } else {
-            @Suppress("DEPRECATION")
-            getSystemService(VIBRATOR_SERVICE) as Vibrator
-        }
+        vibrator.vibrate(effect)
     }
 
     override fun onResume() {
@@ -384,16 +461,17 @@ private fun WearingAidApp(
     connectedDeviceName: String?,
     isRecording: Boolean,
     debugMode: Boolean,
+    featuresEnabled: Int,
     syncState: SyncState,
-    activeKeyIndex: Int,
-    activeKeyColor: String,
-    estimatedBpm: Float,
+    activeKeyIndex: () -> Int,
+    activeKeyColor: () -> String,
+    estimatedBpm: () -> Float,
     onGenreSelected: (GenreProfile) -> Unit,
     onToggleListening: () -> Unit,
     onToggleCompanionMode: (Boolean) -> Unit,
     onToggleDebugMode: () -> Unit,
-    onEnsureListening: () -> Unit,
-    onAudioTick: () -> Unit,
+    onToggleFeature: (Int) -> Unit,
+    onAudioTick: suspend () -> Unit,
     onDebugTick: () -> Unit
 ) {
     WearingAidTheme {
@@ -402,14 +480,14 @@ private fun WearingAidApp(
                 if (selectedGenre == null) {
                     GenreSelectionScreen(
                         selectedGenre = null,
+                        syncState = syncState,
                         onGenreSelected = onGenreSelected
                     )
                 } else {
-                    val pagerState = rememberPagerState(pageCount = { 3 })
+                    val pagerState = rememberPagerState(pageCount = { 4 })
                     val pagerScope = rememberCoroutineScope()
                     val pagerFocusRequester = remember { FocusRequester() }
 
-                    LaunchedEffect(selectedGenre.code) { onEnsureListening() }
                     LaunchedEffect(isRecording) {
                         while (isRecording) {
                             delay(100.milliseconds)
@@ -433,7 +511,7 @@ private fun WearingAidApp(
                             .onRotaryScrollEvent { event ->
                                 pagerScope.launch {
                                     val next = if (event.verticalScrollPixels > 0)
-                                        (pagerState.currentPage + 1).coerceAtMost(2)
+                                        (pagerState.currentPage + 1).coerceAtMost(3)
                                     else
                                         (pagerState.currentPage - 1).coerceAtLeast(0)
                                     pagerState.animateScrollToPage(next)
@@ -444,7 +522,8 @@ private fun WearingAidApp(
                     ) {
                         HorizontalPager(
                             state = pagerState,
-                            modifier = Modifier.fillMaxSize()
+                            modifier = Modifier.fillMaxSize(),
+                            beyondViewportPageCount = 3
                         ) { page ->
                             when (page) {
                                 0 -> ListeningScreen(
@@ -453,13 +532,20 @@ private fun WearingAidApp(
                                     activeKeyIndex = activeKeyIndex,
                                     activeKeyColor = activeKeyColor,
                                     estimatedBpm = estimatedBpm,
+                                    syncState = syncState,
                                     onToggleListening = onToggleListening
                                 )
                                 1 -> GenreSelectionScreen(
                                     selectedGenre = selectedGenre,
+                                    syncState = syncState,
                                     onGenreSelected = onGenreSelected
                                 )
-                                2 -> SettingsScreen(
+                                2 -> FeaturesScreen(
+                                    featuresEnabled = featuresEnabled,
+                                    syncState = syncState,
+                                    onToggleFeature = onToggleFeature
+                                )
+                                3 -> SettingsScreen(
                                     companionModeEnabled = companionModeEnabled,
                                     isBroadcasting = isBroadcasting,
                                     isPeerConnected = isPeerConnected,
@@ -483,125 +569,201 @@ private fun WearingAidApp(
 private fun ListeningScreen(
     selectedGenre: GenreProfile,
     isRecording: Boolean,
-    activeKeyIndex: Int,
-    activeKeyColor: String,
-    estimatedBpm: Float,
+    activeKeyIndex: () -> Int,
+    activeKeyColor: () -> String,
+    estimatedBpm: () -> Float,
+    syncState: SyncState,
     onToggleListening: () -> Unit
 ) {
-    val hasDetectedKey = isRecording && activeKeyIndex in ENGINE_KEYS.indices
-    val backgroundColor = if (hasDetectedKey) parseHexColor(activeKeyColor) else MaterialTheme.colorScheme.background
+    val currentKeyIndex = activeKeyIndex()
+    val hasDetectedKey = isRecording && currentKeyIndex in ENGINE_KEYS.indices
+    val backgroundColor = if (hasDetectedKey) parseHexColor(activeKeyColor()) else MaterialTheme.colorScheme.background
     val foregroundColor = if (hasDetectedKey && backgroundColor.luminanceEstimate() > 0.55f) Color.Black else MaterialTheme.colorScheme.onBackground
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(backgroundColor)
-            .padding(16.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = ">",
-            color = foregroundColor.copy(alpha = 0.65f),
-            modifier = Modifier.align(Alignment.CenterEnd),
-            style = MaterialTheme.typography.titleMedium
-        )
+    Box(modifier = Modifier.fillMaxSize().background(backgroundColor)) {
         Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 16.dp)
+                .padding(top = 4.dp, bottom = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            if (hasDetectedKey) {
-                Text(
-                    text = ENGINE_KEYS[activeKeyIndex],
-                    color = foregroundColor,
-                    style = MaterialTheme.typography.displayMedium,
-                    fontWeight = FontWeight.Bold,
-                    textAlign = TextAlign.Center
-                )
-                Text(
-                    text = "${estimatedBpm.roundToInt()} BPM",
-                    color = foregroundColor.copy(alpha = 0.78f),
-                    style = MaterialTheme.typography.labelMedium
-                )
-            } else {
-                Text(
-                    text = if (isRecording) "Listening" else "Paused",
-                    color = foregroundColor,
-                    style = MaterialTheme.typography.displayMedium,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    text = selectedGenre.title,
-                    color = foregroundColor.copy(alpha = 0.78f),
-                    style = MaterialTheme.typography.labelMedium
-                )
-            }
-            Spacer(modifier = Modifier.height(12.dp))
-            Button(
-                onClick = onToggleListening,
-                modifier = Modifier.fillMaxWidth(0.58f)
-            ) {
-                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    Text(text = if (isRecording) "Pause" else "Resume")
+            SyncStatusIcon(syncState = syncState)
+            Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    if (hasDetectedKey) {
+                        Text(
+                            text = ENGINE_KEYS[currentKeyIndex],
+                            color = foregroundColor,
+                            style = MaterialTheme.typography.displayMedium,
+                            fontWeight = FontWeight.Bold,
+                            textAlign = TextAlign.Center
+                        )
+                        Text(
+                            text = "${estimatedBpm().roundToInt()} BPM",
+                            color = foregroundColor.copy(alpha = 0.78f),
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                    } else {
+                        Text(
+                            text = if (isRecording) "Listening" else "Paused",
+                            color = foregroundColor,
+                            style = MaterialTheme.typography.displayMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = selectedGenre.title,
+                            color = foregroundColor.copy(alpha = 0.78f),
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Button(
+                        onClick = onToggleListening,
+                        modifier = Modifier.fillMaxWidth(0.58f)
+                    ) {
+                        Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                            Text(text = if (isRecording) "Pause" else "Resume")
+                        }
+                    }
                 }
             }
         }
+        Icon(
+            imageVector = arrow_right,
+            contentDescription = null,
+            tint = foregroundColor.copy(alpha = 0.65f),
+            modifier = Modifier.align(Alignment.CenterEnd).size(18.dp)
+        )
     }
 }
 
 @Composable
 private fun GenreSelectionScreen(
     selectedGenre: GenreProfile?,
+    syncState: SyncState,
     onGenreSelected: (GenreProfile) -> Unit
 ) {
-    ScalingLazyColumn(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background),
-        contentPadding = PaddingValues(start = 10.dp, top = 32.dp, end = 10.dp, bottom = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-        autoCentering = null,
-    ) {
-        item {
-            Text(
-                text = "Genre",
-                color = MaterialTheme.colorScheme.onBackground,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
-            )
-        }
-        items(GENRE_PROFILES) { genre ->
-            val isSelected = selectedGenre?.code == genre.code
-            Button(
-                onClick = { onGenreSelected(genre) },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
+    val iconTint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f)
+    Box(modifier = Modifier.fillMaxSize()) {
+        ScalingLazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background),
+            contentPadding = PaddingValues(start = 10.dp, top = 4.dp, end = 10.dp, bottom = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+            autoCentering = null,
+        ) {
+            item {
+                Box(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                    contentAlignment = Alignment.Center
+                ) { SyncStatusIcon(syncState = syncState) }
+            }
+            item {
+                Text(
+                    text = "Genre",
+                    color = MaterialTheme.colorScheme.onBackground,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            items(GENRE_PROFILES) { genre ->
+                val isSelected = selectedGenre?.code == genre.code
+                Button(
+                    onClick = { onGenreSelected(genre) },
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = genre.title,
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                        )
-                        Text(
-                            text = genre.subtitle,
-                            style = MaterialTheme.typography.labelSmall
-                        )
-                    }
-                    if (isSelected) {
-                        Icon(
-                            imageVector = check,
-                            contentDescription = null,
-                            modifier = Modifier.size(14.dp)
-                        )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = genre.title,
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                            )
+                            Text(
+                                text = genre.subtitle,
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        }
+                        if (isSelected) {
+                            Icon(
+                                imageVector = check,
+                                contentDescription = null,
+                                modifier = Modifier.size(14.dp)
+                            )
+                        }
                     }
                 }
             }
         }
+        Icon(imageVector = arrow_left, contentDescription = null, tint = iconTint,
+            modifier = Modifier.align(Alignment.CenterStart).size(18.dp))
+        Icon(imageVector = arrow_right, contentDescription = null, tint = iconTint,
+            modifier = Modifier.align(Alignment.CenterEnd).size(18.dp))
+    }
+}
+
+@Composable
+private fun FeaturesScreen(
+    featuresEnabled: Int,
+    syncState: SyncState,
+    onToggleFeature: (Int) -> Unit
+) {
+    val keyOn = featuresEnabled and FEATURE_KEY != 0
+    val tempoOn = featuresEnabled and FEATURE_TEMPO != 0
+    val iconTint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f)
+
+    Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 16.dp)
+                .padding(top = 4.dp, bottom = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            SyncStatusIcon(syncState = syncState)
+            Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = "Features",
+                        color = MaterialTheme.colorScheme.onBackground,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Button(
+                        onClick = { onToggleFeature(FEATURE_KEY) },
+                        modifier = Modifier.fillMaxWidth(0.82f)
+                    ) {
+                        Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                            Text(text = if (keyOn) "Key Detection: On" else "Key Detection: Off")
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Button(
+                        onClick = { onToggleFeature(FEATURE_TEMPO) },
+                        modifier = Modifier.fillMaxWidth(0.82f)
+                    ) {
+                        Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                            Text(text = if (tempoOn) "Tempo Tracking: On" else "Tempo Tracking: Off")
+                        }
+                    }
+                }
+            }
+        }
+        Icon(imageVector = arrow_left, contentDescription = null, tint = iconTint,
+            modifier = Modifier.align(Alignment.CenterStart).size(18.dp))
+        Icon(imageVector = arrow_right, contentDescription = null, tint = iconTint,
+            modifier = Modifier.align(Alignment.CenterEnd).size(18.dp))
     }
 }
 
@@ -617,64 +779,65 @@ private fun SettingsScreen(
     onToggleCompanionMode: (Boolean) -> Unit,
     onToggleDebugMode: () -> Unit
 ) {
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-            .padding(16.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = "<",
-            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f),
-            modifier = Modifier.align(Alignment.CenterStart),
-            style = MaterialTheme.typography.titleMedium
-        )
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+    val settingsIconTint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f)
+    Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 16.dp)
+                .padding(top = 4.dp, bottom = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
             SyncStatusIcon(syncState = syncState)
-            Text(
-                text = "Settings",
-                color = MaterialTheme.colorScheme.onBackground,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
-            )
-            Spacer(modifier = Modifier.height(10.dp))
-            Button(
-                onClick = { onToggleCompanionMode(!companionModeEnabled) },
-                modifier = Modifier.fillMaxWidth(0.72f)
-            ) {
-                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    Text(text = if (companionModeEnabled) "Companion On" else "Companion Off")
-                }
-            }
-            if (companionModeEnabled) {
-                Spacer(modifier = Modifier.height(10.dp))
-                Text(
-                    text = when {
-                        isPeerConnected && !connectedDeviceName.isNullOrBlank() -> connectedDeviceName
-                        isPeerConnected -> "Connected"
-                        isBroadcasting && !localDeviceName.isNullOrBlank() -> localDeviceName
-                        isBroadcasting -> "Broadcasting"
-                        else -> "Preparing"
-                    },
-                    color = if (isPeerConnected || isBroadcasting) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold,
-                    textAlign = TextAlign.Center
-                )
-                if (isPeerConnected) {
-                    Spacer(modifier = Modifier.height(6.dp))
+            Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = "Settings",
+                        color = MaterialTheme.colorScheme.onBackground,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
                     Button(
-                        onClick = onToggleDebugMode,
+                        onClick = { onToggleCompanionMode(!companionModeEnabled) },
                         modifier = Modifier.fillMaxWidth(0.72f)
                     ) {
                         Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                            Text(text = if (debugMode) "Debug On" else "Debug Off")
+                            Text(text = if (companionModeEnabled) "Companion On" else "Companion Off")
+                        }
+                    }
+                    if (companionModeEnabled) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text(
+                            text = when {
+                                isPeerConnected && !connectedDeviceName.isNullOrBlank() -> connectedDeviceName
+                                isPeerConnected -> "Connected"
+                                isBroadcasting && !localDeviceName.isNullOrBlank() -> localDeviceName
+                                isBroadcasting -> "Broadcasting"
+                                else -> "Preparing"
+                            },
+                            color = if (isPeerConnected || isBroadcasting) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            textAlign = TextAlign.Center
+                        )
+                        if (isPeerConnected) {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Button(
+                                onClick = onToggleDebugMode,
+                                modifier = Modifier.fillMaxWidth(0.72f)
+                            ) {
+                                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                                    Text(text = if (debugMode) "Debug On" else "Debug Off")
+                                }
+                            }
                         }
                     }
                 }
             }
         }
+        Icon(imageVector = arrow_left, contentDescription = null, tint = settingsIconTint,
+            modifier = Modifier.align(Alignment.CenterStart).size(18.dp))
     }
 }
 
@@ -691,6 +854,12 @@ private fun SyncStatusIcon(syncState: SyncState) {
             SyncState.SYNCING -> Icon(
                 imageVector = downloading,
                 contentDescription = "Syncing",
+                tint = MaterialTheme.colorScheme.secondary,
+                modifier = Modifier.size(18.dp)
+            )
+            SyncState.UPLOADING -> Icon(
+                imageVector = arrow_upload_progress,
+                contentDescription = "Uploading",
                 tint = MaterialTheme.colorScheme.secondary,
                 modifier = Modifier.size(18.dp)
             )
@@ -734,15 +903,16 @@ private fun WearingAidAppPreview() {
         connectedDeviceName = null,
         isRecording = true,
         debugMode = false,
+        featuresEnabled = DEFAULT_FEATURES,
         syncState = SyncState.STANDALONE,
-        activeKeyIndex = -1,
-        activeKeyColor = "#000000",
-        estimatedBpm = 120f,
+        activeKeyIndex = { -1 },
+        activeKeyColor = { "#000000" },
+        estimatedBpm = { 120f },
         onGenreSelected = {},
         onToggleListening = {},
         onToggleCompanionMode = {},
         onToggleDebugMode = {},
-        onEnsureListening = {},
+        onToggleFeature = {},
         onAudioTick = {},
         onDebugTick = {}
     )

@@ -27,6 +27,10 @@ class AudioViewModel : ViewModel() {
         audioEngine.selectGenre(genreCode)
     }
 
+    fun setFeatures(features: Int) {
+        audioEngine.updateFeatures(features)
+    }
+
     fun restartRecording() {
         audioEngine.stop()
         audioEngine.start()
