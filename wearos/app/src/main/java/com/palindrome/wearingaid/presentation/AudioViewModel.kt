@@ -27,6 +27,16 @@ class AudioViewModel : ViewModel() {
         audioEngine.selectGenre(genreCode)
     }
 
+    fun restartRecording() {
+        audioEngine.stop()
+        audioEngine.start()
+    }
+
+    fun getDebugPacket(keyIndex: Int, bpm: Float): String {
+        val rms = audioEngine.getRms()
+        return "k=$keyIndex,b=${bpm.toInt()},r=${"%.3f".format(rms)}"
+    }
+
     // Prevents C++ memory leaks when the ViewModel is destroyed
     override fun onCleared() {
         super.onCleared()

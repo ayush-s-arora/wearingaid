@@ -27,6 +27,8 @@ EngineOutput engine_tick_tempo(EngineState* engine, float time_delta_seconds);
 
 void engine_set_genre(EngineState* engine, int genre_code); // 0 Temperley, 1 Shaath, 2 EDMA, 3 Wei Chai, 4 Tonic Triad
 
+float engine_get_rms(EngineState* engine);
+
 void engine_destroy(EngineState* engine);
 
 #ifdef __cplusplus

@@ -282,6 +282,10 @@ public:
         }
     }
 
+    float get_rms() const {
+        return last_frame_rms.load(std::memory_order_relaxed);
+    }
+
     void set_genre(ProfileType type) {
         build_key_profiles(type);
         // Reset the HMM path to prevent inertia from the previous genre dragging
@@ -329,6 +333,11 @@ void engine_set_genre(EngineState* engine, int genre_code) {
         int safe_code = std::clamp(genre_code, 0, 4);
         engine->instance->set_genre(static_cast<ProfileType>(safe_code));
     }
+}
+
+float engine_get_rms(EngineState* engine) {
+    if (engine && engine->instance) return engine->instance->get_rms();
+    return 0.0f;
 }
 
 void engine_set_features(EngineState* engine, uint32_t features) {

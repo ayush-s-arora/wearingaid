@@ -6,6 +6,14 @@ import { useEffect, useRef, useState } from "react";
 const WEARINGAID_SERVICE_UUID = "696afb11-bed7-42cc-b178-dd49bac6c8ef";
 const CONFIG_CHARACTERISTIC_UUID = "692580ea-d39f-49f8-bb81-ae799d99de8d";
 const HEARTBEAT_CHARACTERISTIC_UUID = "3f2b0ed6-6df7-4f1a-8d77-fc7f2f76d211";
+const DEBUG_CHARACTERISTIC_UUID = "b2e7f3c1-9d4a-4f58-a6e0-3c8d12b54e71";
+
+const ENGINE_KEYS = [
+  "C Maj","C# Maj","D Maj","D# Maj","E Maj","F Maj",
+  "F# Maj","G Maj","G# Maj","A Maj","A# Maj","B Maj",
+  "C Min","C# Min","D Min","D# Min","E Min","F Min",
+  "F# Min","G Min","G# Min","A Min","A# Min","B Min",
+];
 
 const toArrayBuffer = (value: ArrayBufferLike | ArrayBufferView<ArrayBufferLike>): ArrayBuffer => {
   if (ArrayBuffer.isView(value)) {
@@ -40,9 +48,13 @@ export default function Home() {
   const [connectedDeviceName, setConnectedDeviceName] = useState<string | null>(null);
   const [sensitivity, setSensitivity] = useState(5);
   const [heartbeatCharacteristic, setHeartbeatCharacteristic] = useState<BluetoothRemoteGATTCharacteristic | null>(null);
+  const [debugMode, setDebugMode] = useState(false);
+  const [debugLogs, setDebugLogs] = useState<string[]>([]);
   const deviceRef = useRef<BluetoothDevice | null>(null);
   const characteristicRef = useRef<BluetoothRemoteGATTCharacteristic | null>(null);
   const heartbeatCharacteristicRef = useRef<BluetoothRemoteGATTCharacteristic | null>(null);
+  const debugCharacteristicRef = useRef<BluetoothRemoteGATTCharacteristic | null>(null);
+  const debugHandlerRef = useRef<((e: Event) => void) | null>(null);
   const pendingWriteRef = useRef<{ newSens: number; newPalette: Record<string, string> } | null>(null);
   const writeInFlightRef = useRef(false);
 
@@ -75,8 +87,18 @@ export default function Home() {
   }, [heartbeatCharacteristic]);
 
   const handleDisconnected = () => {
+    const debugChar = debugCharacteristicRef.current;
+    const handler = debugHandlerRef.current;
+    if (debugChar && handler) {
+      debugChar.removeEventListener("characteristicvaluechanged", handler);
+      debugChar.stopNotifications().catch(() => {});
+    }
+    debugCharacteristicRef.current = null;
+    debugHandlerRef.current = null;
     pendingWriteRef.current = null;
     writeInFlightRef.current = false;
+    setDebugMode(false);
+    setDebugLogs([]);
     setDevice(null);
     setCharacteristic(null);
     setHeartbeatCharacteristic(null);
@@ -115,6 +137,8 @@ export default function Home() {
       setStatus("Getting Config Characteristic");
       const configChar = await service?.getCharacteristic(CONFIG_CHARACTERISTIC_UUID);
       const heartbeatChar = await service?.getCharacteristic(HEARTBEAT_CHARACTERISTIC_UUID);
+      const debugChar = await service?.getCharacteristic(DEBUG_CHARACTERISTIC_UUID).catch(() => null);
+      debugCharacteristicRef.current = debugChar ?? null;
 
       if (!configChar || !heartbeatChar) {
         setStatus("Connection failed: characteristic not found.");
@@ -219,6 +243,41 @@ export default function Home() {
     return () => window.clearInterval(interval);
   }, [device, heartbeatCharacteristic]);
 
+  const toggleDebugMode = async () => {
+    const debugChar = debugCharacteristicRef.current;
+    if (!debugChar) return;
+
+    if (!debugMode) {
+      const handler = (e: Event) => {
+        const value = (e.target as BluetoothRemoteGATTCharacteristic).value;
+        if (!value) return;
+        const text = new TextDecoder().decode(value);
+        const parts = Object.fromEntries(text.split(",").map(p => p.split("=")));
+        const keyIdx = parseInt(parts["k"] ?? "-1");
+        const bpm = parts["b"] ?? "?";
+        const rms = parts["r"] ?? "?";
+        const keyName = keyIdx >= 0 && keyIdx < ENGINE_KEYS.length ? ENGINE_KEYS[keyIdx] : "Silence";
+        const ts = new Date().toLocaleTimeString();
+        setDebugLogs(prev => [`[${ts}] ${keyName} | ${bpm} BPM | RMS ${rms}`, ...prev].slice(0, 100));
+      };
+      debugHandlerRef.current = handler;
+      try {
+        await debugChar.startNotifications();
+        debugChar.addEventListener("characteristicvaluechanged", handler);
+        setDebugMode(true);
+      } catch (err) {
+        console.error("Failed to start debug notifications:", err);
+      }
+    } else {
+      const handler = debugHandlerRef.current;
+      if (handler) debugChar.removeEventListener("characteristicvaluechanged", handler);
+      debugHandlerRef.current = null;
+      await debugChar.stopNotifications().catch(() => {});
+      setDebugMode(false);
+      setDebugLogs([]);
+    }
+  };
+
   const queueConfigPacket = (newSens: number, newPalette: Record<string, string>) => {
     setSensitivity(newSens);
     setPalette(newPalette);
@@ -280,6 +339,32 @@ export default function Home() {
                   ))}
                 </div>
               </div>
+
+              <button
+                onClick={() => void toggleDebugMode()}
+                className={`w-full mt-2 font-bold py-2 px-4 rounded border transition-colors ${
+                  debugMode
+                    ? "bg-yellow-900/50 hover:bg-yellow-900 text-yellow-200 border-yellow-700"
+                    : "bg-gray-800 hover:bg-gray-700 text-gray-300 border-gray-600"
+                }`}
+              >
+                {debugMode ? "Debug: On" : "Debug: Off"}
+              </button>
+
+              {debugMode && (
+                <div className="w-full flex flex-col gap-2 mt-2">
+                  <span className="text-gray-400 text-xs font-semibold border-b border-gray-700 pb-1">
+                    Debug Log (live from watch)
+                  </span>
+                  <div className="bg-gray-950 rounded border border-gray-800 p-2 h-48 overflow-y-auto font-mono text-xs text-green-400 flex flex-col gap-0.5">
+                    {debugLogs.length === 0 ? (
+                      <span className="text-gray-600">Waiting for packets…</span>
+                    ) : (
+                      debugLogs.map((line, i) => <span key={i}>{line}</span>)
+                    )}
+                  </div>
+                </div>
+              )}
 
               <button
                 onClick={() => device.gatt?.disconnect()}

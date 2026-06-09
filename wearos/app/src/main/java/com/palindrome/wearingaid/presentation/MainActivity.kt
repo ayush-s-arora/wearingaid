@@ -9,6 +9,7 @@ import android.os.Bundle
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -30,7 +31,6 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
 import androidx.wear.compose.foundation.lazy.items
-import androidx.wear.compose.foundation.lazy.rememberScalingLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -44,7 +44,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.focusable
-import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.rotary.onRotaryScrollEvent
@@ -136,6 +135,7 @@ class MainActivity : ComponentActivity() {
     private var isPeerConnected by mutableStateOf(false)
     private var isBroadcasting by mutableStateOf(false)
     private var isRecording by mutableStateOf(false)
+    private var debugMode by mutableStateOf(false)
     private var syncState by mutableStateOf(SyncState.STANDALONE)
     private var companionModeEnabled by mutableStateOf(false)
     private var selectedGenre by mutableStateOf<GenreProfile?>(null)
@@ -209,6 +209,7 @@ class MainActivity : ComponentActivity() {
                 localDeviceName = localDeviceName,
                 connectedDeviceName = connectedDeviceName,
                 isRecording = isRecording,
+                debugMode = debugMode,
                 syncState = syncState,
                 activeKeyIndex = activeKeyIndex,
                 activeKeyColor = colorForKey(activeKeyIndex),
@@ -216,8 +217,10 @@ class MainActivity : ComponentActivity() {
                 onGenreSelected = { genre -> selectGenre(genre) },
                 onToggleListening = { toggleRecording() },
                 onToggleCompanionMode = { enabled -> setCompanionMode(enabled) },
+                onToggleDebugMode = { debugMode = !debugMode },
                 onEnsureListening = { ensureRecording() },
-                onAudioTick = { readAudioOutput() }
+                onAudioTick = { readAudioOutput() },
+                onDebugTick = { sendDebugPacket() }
             )
         }
 
@@ -257,6 +260,7 @@ class MainActivity : ComponentActivity() {
             audioViewModel.stopRecording()
             isRecording = false
             activeKeyIndex = -1
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         } else {
             ensureRecording()
         }
@@ -265,6 +269,7 @@ class MainActivity : ComponentActivity() {
     private fun startRecording() {
         audioViewModel.startRecording()
         isRecording = true
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 
     private fun ensureBroadcasting() {
@@ -311,6 +316,11 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun sendDebugPacket() {
+        if (!isRecording || !debugMode || !isPeerConnected) return
+        bleServerManager.sendDebugPacket(audioViewModel.getDebugPacket(activeKeyIndex, estimatedBpm))
+    }
+
     private fun parseCompanionPayload(rawPayload: String): Boolean {
         return try {
             val parts = rawPayload.split(",")
@@ -349,9 +359,17 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        // Oboe stream is killed when WearOS suspends the activity; restart it if we
+        // were recording so the UI doesn't lie about being active.
+        if (isRecording) audioViewModel.restartRecording()
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         stopGattServer()
+        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 }
 
@@ -365,6 +383,7 @@ private fun WearingAidApp(
     localDeviceName: String?,
     connectedDeviceName: String?,
     isRecording: Boolean,
+    debugMode: Boolean,
     syncState: SyncState,
     activeKeyIndex: Int,
     activeKeyColor: String,
@@ -372,8 +391,10 @@ private fun WearingAidApp(
     onGenreSelected: (GenreProfile) -> Unit,
     onToggleListening: () -> Unit,
     onToggleCompanionMode: (Boolean) -> Unit,
+    onToggleDebugMode: () -> Unit,
     onEnsureListening: () -> Unit,
-    onAudioTick: () -> Unit
+    onAudioTick: () -> Unit,
+    onDebugTick: () -> Unit
 ) {
     WearingAidTheme {
         AppScaffold {
@@ -395,10 +416,14 @@ private fun WearingAidApp(
                             onAudioTick()
                         }
                     }
-                    // Hand focus to the pager box whenever we're NOT on the genre page;
-                    // the genre page's own LaunchedEffect will steal it back when active.
+                    LaunchedEffect(isRecording, debugMode, isPeerConnected) {
+                        while (isRecording && debugMode && isPeerConnected) {
+                            delay(500.milliseconds)
+                            onDebugTick()
+                        }
+                    }
                     LaunchedEffect(pagerState.currentPage) {
-                        if (pagerState.currentPage != 1) pagerFocusRequester.requestFocus()
+                        pagerFocusRequester.requestFocus()
                     }
 
                     Box(
@@ -432,8 +457,7 @@ private fun WearingAidApp(
                                 )
                                 1 -> GenreSelectionScreen(
                                     selectedGenre = selectedGenre,
-                                    onGenreSelected = onGenreSelected,
-                                    isCurrentPage = pagerState.currentPage == 1
+                                    onGenreSelected = onGenreSelected
                                 )
                                 2 -> SettingsScreen(
                                     companionModeEnabled = companionModeEnabled,
@@ -442,7 +466,9 @@ private fun WearingAidApp(
                                     localDeviceName = localDeviceName,
                                     connectedDeviceName = connectedDeviceName,
                                     syncState = syncState,
-                                    onToggleCompanionMode = onToggleCompanionMode
+                                    debugMode = debugMode,
+                                    onToggleCompanionMode = onToggleCompanionMode,
+                                    onToggleDebugMode = onToggleDebugMode
                                 )
                             }
                         }
@@ -526,30 +552,12 @@ private fun ListeningScreen(
 @Composable
 private fun GenreSelectionScreen(
     selectedGenre: GenreProfile?,
-    onGenreSelected: (GenreProfile) -> Unit,
-    isCurrentPage: Boolean = true
+    onGenreSelected: (GenreProfile) -> Unit
 ) {
-    val listState = rememberScalingLazyListState()
-    val focusRequester = remember { FocusRequester() }
-    val coroutineScope = rememberCoroutineScope()
-
-    LaunchedEffect(isCurrentPage) {
-        if (isCurrentPage) focusRequester.requestFocus()
-    }
-
     ScalingLazyColumn(
-        state = listState,
         modifier = Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-            .focusRequester(focusRequester)
-            .onRotaryScrollEvent { event ->
-                coroutineScope.launch {
-                    listState.scrollBy(event.verticalScrollPixels)
-                }
-                true
-            }
-            .focusable(),
+            .background(MaterialTheme.colorScheme.background),
         contentPadding = PaddingValues(start = 10.dp, top = 32.dp, end = 10.dp, bottom = 16.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
         autoCentering = null,
@@ -605,7 +613,9 @@ private fun SettingsScreen(
     localDeviceName: String?,
     connectedDeviceName: String?,
     syncState: SyncState,
-    onToggleCompanionMode: (Boolean) -> Unit
+    debugMode: Boolean,
+    onToggleCompanionMode: (Boolean) -> Unit,
+    onToggleDebugMode: () -> Unit
 ) {
     Box(
         modifier = Modifier
@@ -652,6 +662,17 @@ private fun SettingsScreen(
                     fontWeight = FontWeight.Bold,
                     textAlign = TextAlign.Center
                 )
+                if (isPeerConnected) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Button(
+                        onClick = onToggleDebugMode,
+                        modifier = Modifier.fillMaxWidth(0.72f)
+                    ) {
+                        Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                            Text(text = if (debugMode) "Debug On" else "Debug Off")
+                        }
+                    }
+                }
             }
         }
     }
@@ -712,6 +733,7 @@ private fun WearingAidAppPreview() {
         localDeviceName = "Galaxy Watch 6",
         connectedDeviceName = null,
         isRecording = true,
+        debugMode = false,
         syncState = SyncState.STANDALONE,
         activeKeyIndex = -1,
         activeKeyColor = "#000000",
@@ -719,7 +741,9 @@ private fun WearingAidAppPreview() {
         onGenreSelected = {},
         onToggleListening = {},
         onToggleCompanionMode = {},
+        onToggleDebugMode = {},
         onEnsureListening = {},
-        onAudioTick = {}
+        onAudioTick = {},
+        onDebugTick = {}
     )
 }

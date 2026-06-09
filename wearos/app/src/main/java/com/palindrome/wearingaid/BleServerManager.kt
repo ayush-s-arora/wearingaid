@@ -5,6 +5,7 @@ import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCharacteristic
+import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothGattServer
 import android.bluetooth.BluetoothGattServerCallback
 import android.bluetooth.BluetoothGattService
@@ -14,11 +15,13 @@ import android.bluetooth.le.AdvertiseCallback
 import android.bluetooth.le.AdvertiseData
 import android.bluetooth.le.AdvertiseSettings
 import android.content.Context
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelUuid
 import android.os.SystemClock
 import android.util.Log
+import java.util.Collections
 import java.util.UUID
 
 @SuppressLint("MissingPermission")
@@ -34,6 +37,10 @@ class BleServerManager(
     private val serviceUuid = UUID.fromString("696afb11-bed7-42cc-b178-dd49bac6c8ef")
     private val configUuid = UUID.fromString("692580ea-d39f-49f8-bb81-ae799d99de8d")
     private val heartbeatUuid = UUID.fromString("3f2b0ed6-6df7-4f1a-8d77-fc7f2f76d211")
+    private val debugUuid = UUID.fromString("b2e7f3c1-9d4a-4f58-a6e0-3c8d12b54e71")
+    private val cccDescriptorUuid = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
+    private var debugCharacteristic: BluetoothGattCharacteristic? = null
+    private val debugSubscribers: MutableSet<BluetoothDevice> = Collections.synchronizedSet(mutableSetOf())
     private var connectedDevice: BluetoothDevice? = null
     private var lastActivityAt = 0L
     private val connectionWatchdogHandler = Handler(Looper.getMainLooper())
@@ -73,9 +80,22 @@ class BleServerManager(
             BluetoothGattCharacteristic.PERMISSION_WRITE
         )
 
+        val debugChar = BluetoothGattCharacteristic(
+            debugUuid,
+            BluetoothGattCharacteristic.PROPERTY_NOTIFY,
+            BluetoothGattCharacteristic.PERMISSION_READ
+        )
+        val cccDescriptor = BluetoothGattDescriptor(
+            cccDescriptorUuid,
+            BluetoothGattDescriptor.PERMISSION_READ or BluetoothGattDescriptor.PERMISSION_WRITE
+        )
+        debugChar.addDescriptor(cccDescriptor)
+        debugCharacteristic = debugChar
+
         val service = BluetoothGattService(serviceUuid, BluetoothGattService.SERVICE_TYPE_PRIMARY)
         service.addCharacteristic(configCharacteristic)
         service.addCharacteristic(heartbeatCharacteristic)
+        service.addCharacteristic(debugChar)
         gattServer?.addService(service)
 
         startAdvertising()
@@ -126,8 +146,26 @@ class BleServerManager(
                 if (connectedDevice?.address == device.address) {
                     connectedDevice = null
                 }
+                debugSubscribers.remove(device)
                 connectionWatchdogHandler.removeCallbacks(connectionWatchdogRunnable)
                 onConnectionStateChanged(false, null)
+            }
+        }
+
+        override fun onDescriptorWriteRequest(
+            device: BluetoothDevice, requestId: Int,
+            descriptor: BluetoothGattDescriptor, preparedWrite: Boolean,
+            responseNeeded: Boolean, offset: Int, value: ByteArray
+        ) {
+            if (descriptor.uuid == cccDescriptorUuid) {
+                if (value.contentEquals(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)) {
+                    debugSubscribers.add(device)
+                } else {
+                    debugSubscribers.remove(device)
+                }
+                if (responseNeeded) {
+                    gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
+                }
             }
         }
 
@@ -169,8 +207,26 @@ class BleServerManager(
         }
     }
 
+    @SuppressLint("MissingPermission")
+    fun sendDebugPacket(payload: String) {
+        val char = debugCharacteristic ?: return
+        val bytes = payload.toByteArray(Charsets.UTF_8).take(20).toByteArray()
+        val snapshot = synchronized(debugSubscribers) { debugSubscribers.toList() }
+        snapshot.forEach { device ->
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                gattServer?.notifyCharacteristicChanged(device, char, false, bytes)
+            } else {
+                @Suppress("DEPRECATION")
+                char.value = bytes
+                @Suppress("DEPRECATION")
+                gattServer?.notifyCharacteristicChanged(device, char, false)
+            }
+        }
+    }
+
     fun stopServer() {
         connectionWatchdogHandler.removeCallbacks(connectionWatchdogRunnable)
+        debugSubscribers.clear()
         connectedDevice?.let { device ->
             gattServer?.cancelConnection(device)
             connectedDevice = null

@@ -109,6 +109,13 @@ Java_com_palindrome_wearingaid_NativeAudioEngine_tickOutput(JNIEnv *env, jobject
     return result;
 }
 
+JNIEXPORT jfloat JNICALL
+Java_com_palindrome_wearingaid_NativeAudioEngine_getRms(JNIEnv *env, jobject thiz, jlong handle) {
+    auto* wrapper = reinterpret_cast<OboeEngineWrapper*>(handle);
+    if (!wrapper) return 0.0f;
+    return static_cast<jfloat>(engine_get_rms(wrapper->core_engine));
+}
+
 JNIEXPORT void JNICALL
 Java_com_palindrome_wearingaid_NativeAudioEngine_setGenre(JNIEnv *env, jobject thiz, jlong handle, jint genreCode) {
     auto* wrapper = reinterpret_cast<OboeEngineWrapper*>(handle);

@@ -18,6 +18,7 @@ class NativeAudioEngine {
     external fun stopRecording(handle: Long)
     external fun tickTempo(handle: Long, deltaSec: Float): Boolean
     external fun tickOutput(handle: Long, deltaSec: Float): FloatArray
+    external fun getRms(handle: Long): Float
     external fun setGenre(handle: Long, genreCode: Int)
 
     private external fun createEngine(): Long
@@ -28,6 +29,7 @@ class NativeAudioEngine {
     fun stop() = stopRecording(engineHandle)
     fun tick(deltaSec: Float): Boolean = tickTempo(engineHandle, deltaSec)
     fun selectGenre(genreCode: Int) = setGenre(engineHandle, genreCode)
+    fun getRms(): Float = getRms(engineHandle)
     fun readOutput(deltaSec: Float): EngineSnapshot {
         val output = tickOutput(engineHandle, deltaSec)
         return EngineSnapshot(
