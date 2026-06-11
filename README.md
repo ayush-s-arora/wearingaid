@@ -16,6 +16,13 @@ Bands rely on auditory cues to ensure they stay in time with their bandmates and
 - pffft: A fork of Julien Pommier's Pretty Fast FFT (PFFFT) library by Márton Danóczy ([github](https://github.com/marton78/pffft)); lightweight, wearable-ready fast fourier transforms
 
 
+## Challenges
+- **Microphone Optimization:** Watch microphones (like the Galaxy Watch6 Classic) are optimized for very close audio sources, which means ambient music audio is often muffled. The incoming audio signal had to be heavily boosted to compensate before performing the FFT; otherwise, the algorithm would lock to one key and not change.
+- **Static Interference:** Continuous frequencies like AC and mains power hums created static noise in the spectrum. (The solution for this is described below in the Key Detection section).
+- **Haptic Interference:** The vibration motor used for haptics caused frequencies that yielded false key detections.
+- **HMM Modeling Constraints:** A basic Hidden Markov Model initially attempted to learn transition patterns that weren't representative of real music, which gave poor results.
+- **Tempo Artifacts:** Motor buzz and complex music structures led to artificially inflated BPMs.
+
 ## Architectural Decisions
 ### Why PFFFT?
 - pffft automatically detects ARM NEON to run instructions with SIMD, and ARM architecture is predominant in the smartwatch market. pffft is the natural choice for a wearable-first approach

@@ -143,6 +143,17 @@
     </section>
 
     <section class="card">
+      <h2>Challenges</h2>
+      <ul>
+        <li><strong>Microphone Optimization:</strong> Watch microphones (like the Galaxy Watch6 Classic) are optimized for very close audio sources, which means ambient music audio is often muffled. The incoming audio signal had to be heavily boosted to compensate before performing the FFT; otherwise, the algorithm would lock to one key and not change.</li>
+        <li><strong>Static Interference:</strong> Continuous frequencies like AC and mains power hums created static noise in the spectrum. (The solution for this is described below in the Key Detection section).</li>
+        <li><strong>Haptic Interference:</strong> The vibration motor used for haptics caused frequencies that yielded false key detections.</li>
+        <li><strong>HMM Modeling Constraints:</strong> A basic Hidden Markov Model initially attempted to learn transition patterns that weren't representative of real music, which gave poor results.</li>
+        <li><strong>Tempo Artifacts:</strong> Motor buzz and complex music structures led to artificially inflated BPMs.</li>
+      </ul>
+    </section>
+
+    <section class="card">
       <h2>Architectural Decisions</h2>
 
       <h3>Why PFFFT?</h3>
