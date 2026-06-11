@@ -649,25 +649,31 @@ private fun ListeningScreen(
                     }
                     Spacer(modifier = Modifier.height(12.dp))
                     Row(
-                        modifier = Modifier.fillMaxWidth(0.85f),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth(0.95f),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Button(
                             onClick = onToggleListening,
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(horizontal = 4.dp)
                         ) {
-                            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                                Text(text = if (isRecording) "Pause" else "Resume")
-                            }
+                            Text(
+                                text = if (isRecording) "Pause" else "Resume",
+                                maxLines = 1,
+                                style = MaterialTheme.typography.labelMedium
+                            )
                         }
                         Button(
                             onClick = onResetEngine,
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(horizontal = 4.dp)
                         ) {
-                            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                                Text(text = "Reset")
-                            }
+                            Text(
+                                text = "Reset",
+                                maxLines = 1,
+                                style = MaterialTheme.typography.labelMedium
+                            )
                         }
                     }
                 }
