@@ -175,10 +175,14 @@
         <li>The WearOS application streams provides raw audio to the engine via Google Oboe (<a href="https://github.com/google/oboe">github</a>), which is a C++ library designed for high-performance, low-latency audio applications on Android. It is the newest Android standard for this kind of application.</li>
       </ol>
 
-      <h3>How does the audio engine work?</h3>
+    </section>
+
+    <section class="card">
+      <h2>Audio Engine & Solutions</h2>
+      <p>The core DSP pipeline is designed specifically to overcome the environmental and hardware challenges of wearable music tracking.</p>
       <img src="flowchart.png" alt="Architecture Flowchart" style="max-width:100%; height:auto; margin-bottom: 20px; border-radius: 8px; border: 1px solid var(--border);" />
 
-      <p><strong>Key Detection:</strong></p>
+      <h3>Key Detection</h3>
       <ul>
         <li><strong>HMM Filter:</strong> Hidden Markov Model (HMM) since key changes typically follow the circle of fifths.</li>
         <li><strong>Pearson Correlation:</strong> Pre-computes mean-centered and L2-normalized key profiles to penalize energy where the key profile expects silence.</li>
@@ -189,7 +193,7 @@
         <li><strong>Robust Logcat:</strong> Emits clear diagnostic states (including starved window tracking for haptic suppression).</li>
       </ul>
 
-      <p><strong>Tempo Tracking:</strong></p>
+      <h3>Tempo Tracking</h3>
       <ul>
         <li><strong>Masked Autocorrelation:</strong> Increases the masked autocorrelation envelope size and actively cancels out motor buzz by feeding <code>0</code> (buzz) or <code>1</code> (content) masks from the <code>env_mask</code> into the correlation.</li>
         <li><strong>Subdivision Support:</strong> Addresses eighth notes by forbidding an artificially fast tempo (e.g., 144 BPM) from borrowing correlation from a slower tempo (72 BPM). Actively rewards eighth note subdivisions with a bonus to favor the true main beat (72 BPM).</li>
@@ -197,11 +201,13 @@
 
       <h3>What is the impact of genre selection?</h3>
       <p>Each genre corresponds with a different key profile in the audio engine. The engine matches the detected chroma against the selected profile to identify the key, and they differ because different genres emphasize scale degrees differently (for instance, electronic music leans heavily on the tonic and fifth, while jazz and classical voicings spread weight across more of the scale). Profile-specific implementation inspired by Dr. Emilia Gómez Gutiérrez's doctoral dissertation, TONAL DESCRIPTION OF MUSIC AUDIO SIGNALS. Profiles derived from the Music Technology Group - Universitat Pompeu Fabra's Essentia library (<a href="https://github.com/MTG/essentia/blob/master/src/algorithms/tonal/key.cpp">github</a>).</p>
+    </section>
 
-      <h3>Evaluation</h3>
+    <section class="card">
+      <h2>Evaluation & Demos</h2>
       <p>To test the system's accuracy, I analyzed four songs with well-known BPM and key signatures. I fed the raw audio files (<code>.wav</code>) into the standalone C++ testing script (<code>main.cpp</code>) to measure the baseline DSP performance without microphone or ambient noise contamination. The script was executed via <code>./build/test_engine ../test-wav/{song-name}.wav</code>.</p>
 
-      <h4>Results</h4>
+      <h3>Results</h3>
       <div style="overflow-x:auto;">
         <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px; text-align: left;">
           <thead>
@@ -246,7 +252,7 @@
         </table>
       </div>
 
-      <h4>Live App Demonstrations</h4>
+      <h3>Live App Demonstrations</h3>
       <p>Below are demonstrations of the WearOS app running these songs live. When tested through the smartwatch microphone in a real-world acoustic environment, the app exhibited the following behaviors:</p>
       
       <ul>
@@ -267,16 +273,20 @@
 
       <p><strong>Fly Me to the Moon:</strong></p>
       <iframe src="https://drive.google.com/file/d/1houBGtidxM9d2vcZMTbkBrlx2yObt9lC/preview" width="100%" height="400" allow="autoplay" allowfullscreen style="border-radius: 8px; margin-bottom: 20px; border: 1px solid var(--border);"></iframe>
+    </section>
 
-      <h3>Build Instructions</h3>
+    <section class="card">
+      <h2>Build Instructions</h2>
       <p>To build the standalone C++ audio engine for local testing:</p>
       <pre><code>cd audio-engine
 rm -rf build
 mkdir build && cd build
 cmake ..
 make</code></pre>
+    </section>
 
-      <h3>Known Limitations</h3>
+    <section class="card">
+      <h2>Known Limitations</h2>
       <ol>
         <li><strong>Tempo Stabilization &amp; Octave Errors:</strong> The tempo tracker requires several seconds of buffered audio to lock onto a steady beat. Despite active subdivision weighting, passages with dense eighth-note rhythms or complex syncopation can occasionally induce transient "octave errors" (e.g., temporarily jumping to 144 BPM instead of 72 BPM) before the algorithm re-stabilizes.</li>
         <li><strong>Local Chord Tracking vs. Global Key:</strong> The key detection algorithm evaluates a short-term smoothed chromagram. Consequently, it may sometimes track localized chord progressions rather than retaining the overarching structural key of the song.</li>
