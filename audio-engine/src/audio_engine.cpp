@@ -11,19 +11,16 @@
 
 // Robust diagnostics: on Android these go to logcat (tag "WearingAidEngine"),
 // viewable with `adb logcat -s WearingAidEngine`. On desktop they go to stderr.
-// Toggle ENGINE_VERBOSE to 0 to silence the per-frame chroma/tempo dumps.
-#define ENGINE_VERBOSE 1
+static bool g_engine_verbose = false;
+
 #if defined(__ANDROID__)
   #include <android/log.h>
   #define ELOG(...) __android_log_print(ANDROID_LOG_DEBUG, "WearingAidEngine", __VA_ARGS__)
 #else
   #define ELOG(...) do { std::fprintf(stderr, "[Engine] " __VA_ARGS__); std::fprintf(stderr, "\n"); } while (0)
 #endif
-#if ENGINE_VERBOSE
-  #define EVLOG(...) ELOG(__VA_ARGS__)
-#else
-  #define EVLOG(...) ((void)0)
-#endif
+
+#define EVLOG(...) do { if (g_engine_verbose) ELOG(__VA_ARGS__); } while (0)
 
 using namespace AudioEngine;
 
@@ -560,73 +557,7 @@ public:
         }
     }
 
-    void process_audio(const float* pcm_data, int num_samples) {
-        if (num_samples != EXPECTED_FRAME_SIZE) return;
-
-        const float sr = sample_rate.load(std::memory_order_relaxed);
-
-        // Blank the frames during/after our own vibration so the engine doesn't
-        // analyze its own motor buzz (see HAPTIC_SUPPRESS_FRAMES). The window is
-        // capped at a THIRD of the beat period: with a fixed 230ms a fast (often
-        // wrong) tempo estimate had the suppression swallowing ~60% of all frames,
-        // which starved the key detector outright (zero KEY frames for 24s
-        // on-device) -- a feedback bug where a bad tempo silenced the key.
-        if (haptic_just_fired.exchange(false, std::memory_order_relaxed)) {
-            const float bpm = std::max(30.0f, tracked_bpm.load(std::memory_order_relaxed));
-            const float period_frames = (60.0f / bpm) * sr / num_samples;
-            // Half the period (was a third): a 186ms window still let the buzz tail
-            // through at moderate tempos -- on-device PEAKS stayed pinned at 190-195Hz.
-            // Half keeps at least every other frame clean, so the key never starves.
-            haptic_suppress_left = std::min(HAPTIC_SUPPRESS_FRAMES,
-                                            std::max(3, static_cast<int>(period_frames / 2.0f)));
-        }
-        const bool frame_contaminated = haptic_suppress_left > 0;
-        if (frame_contaminated) {
-            --haptic_suppress_left;
-            chroma_contaminated = true;
-        }
-
-        static constexpr float GATE_GAIN = 20.0f;
-        float rms_sq = 0.0f;
-        for (int i = 0; i < num_samples; ++i) {
-            float g = std::tanh(pcm_data[i] * GATE_GAIN);
-            rms_sq += g * g;
-        }
-        // Accumulate raw PCM into the 4096-sample chroma buffer.
-        // Gain is applied just before the FFT so it doesn't distort the accumulation.
-        std::memcpy(chroma_fft_in + chroma_acc_fill, pcm_data, num_samples * sizeof(float));
-        chroma_acc_fill += num_samples;
-
-        // RMS on the amplified signal so the sustain gate sees the boosted level
-        const float rms = std::sqrt(rms_sq / num_samples);
-        last_frame_rms.store(rms, std::memory_order_relaxed);
-        rms_ema += 0.05f * (rms - rms_ema);
-
-        // Sustain gate: require MIN_SUSTAINED_FRAMES consecutive loud frames before
-        // updating the key HMM. This rejects brief jiggle transients (1-3 frames)
-        // without resetting HMM state during normal music pauses.
-        if (rms >= SILENCE_THRESHOLD) {
-            sustained_frames = std::min(sustained_frames + 1, MIN_SUSTAINED_FRAMES);
-        } else {
-            sustained_frames = 0;
-        }
-
-        // Track silence duration. A brief gap between phrases preserves the key lock;
-        // only a sustained ~3s silence (song over / put down) wipes it so the next
-        // piece starts fresh.
-        if (rms < SILENCE_THRESHOLD) {
-            if (++silence_frames == LONG_SILENCE_FRAMES) {
-                reset();
-                EVLOG("--- long silence (~3s), key + tempo reset ---");
-            }
-        } else {
-            silence_frames = 0;
-        }
-        output_muted.store(silence_frames >= OUTPUT_MUTE_FRAMES, std::memory_order_relaxed);
-
-        const bool now_sustained = (sustained_frames >= MIN_SUSTAINED_FRAMES);
-        prev_sustained = now_sustained;
-
+    void detect_key(float rms, bool now_sustained, float sr) {
         // Key detection fires every CHROMA_FFT_SIZE samples (~93ms) when sustained.
         // The 4096-point FFT resolves bass semitones: G2 (98 Hz) and F2 (87 Hz) are
         // 11 Hz apart -- only separable at 10.8 Hz/bin, not at 43 Hz/bin (1024-pt FFT).
@@ -891,9 +822,11 @@ public:
             chroma_acc_fill = 0;
             chroma_contaminated = false;
         }
+    }
 
+    void detect_tempo(const float* pcm_data, int num_samples, float sr, float rms, bool frame_contaminated, float frame_duration_s) {
         if (active_features.load(std::memory_order_relaxed) & WEARINGAID_FEATURE_TEMPO) {
-            const float frame_duration_s = static_cast<float>(num_samples) / sr;
+            
             current_time_s += frame_duration_s;
 
             // 1. Onset-strength envelope via SPECTRAL FLUX: sum of positive change in
@@ -994,6 +927,78 @@ public:
         }
     }
 
+    void process_audio(const float* pcm_data, int num_samples) {
+        if (num_samples != EXPECTED_FRAME_SIZE) return;
+
+        const float sr = sample_rate.load(std::memory_order_relaxed);
+
+        // Blank the frames during/after our own vibration so the engine doesn't
+        // analyze its own motor buzz (see HAPTIC_SUPPRESS_FRAMES). The window is
+        // capped at a THIRD of the beat period: with a fixed 230ms a fast (often
+        // wrong) tempo estimate had the suppression swallowing ~60% of all frames,
+        // which starved the key detector outright (zero KEY frames for 24s
+        // on-device) -- a feedback bug where a bad tempo silenced the key.
+        if (haptic_just_fired.exchange(false, std::memory_order_relaxed)) {
+            const float bpm = std::max(30.0f, tracked_bpm.load(std::memory_order_relaxed));
+            const float period_frames = (60.0f / bpm) * sr / num_samples;
+            // Half the period (was a third): a 186ms window still let the buzz tail
+            // through at moderate tempos -- on-device PEAKS stayed pinned at 190-195Hz.
+            // Half keeps at least every other frame clean, so the key never starves.
+            haptic_suppress_left = std::min(HAPTIC_SUPPRESS_FRAMES,
+                                            std::max(3, static_cast<int>(period_frames / 2.0f)));
+        }
+        const bool frame_contaminated = haptic_suppress_left > 0;
+        if (frame_contaminated) {
+            --haptic_suppress_left;
+            chroma_contaminated = true;
+        }
+
+        static constexpr float GATE_GAIN = 20.0f;
+        float rms_sq = 0.0f;
+        for (int i = 0; i < num_samples; ++i) {
+            float g = std::tanh(pcm_data[i] * GATE_GAIN);
+            rms_sq += g * g;
+        }
+        // Accumulate raw PCM into the 4096-sample chroma buffer.
+        // Gain is applied just before the FFT so it doesn't distort the accumulation.
+        std::memcpy(chroma_fft_in + chroma_acc_fill, pcm_data, num_samples * sizeof(float));
+        chroma_acc_fill += num_samples;
+
+        // RMS on the amplified signal so the sustain gate sees the boosted level
+        const float rms = std::sqrt(rms_sq / num_samples);
+        last_frame_rms.store(rms, std::memory_order_relaxed);
+        rms_ema += 0.05f * (rms - rms_ema);
+
+        // Sustain gate: require MIN_SUSTAINED_FRAMES consecutive loud frames before
+        // updating the key HMM. This rejects brief jiggle transients (1-3 frames)
+        // without resetting HMM state during normal music pauses.
+        if (rms >= SILENCE_THRESHOLD) {
+            sustained_frames = std::min(sustained_frames + 1, MIN_SUSTAINED_FRAMES);
+        } else {
+            sustained_frames = 0;
+        }
+
+        // Track silence duration. A brief gap between phrases preserves the key lock;
+        // only a sustained ~3s silence (song over / put down) wipes it so the next
+        // piece starts fresh.
+        if (rms < SILENCE_THRESHOLD) {
+            if (++silence_frames == LONG_SILENCE_FRAMES) {
+                reset();
+                EVLOG("--- long silence (~3s), key + tempo reset ---");
+            }
+        } else {
+            silence_frames = 0;
+        }
+        output_muted.store(silence_frames >= OUTPUT_MUTE_FRAMES, std::memory_order_relaxed);
+
+        const bool now_sustained = (sustained_frames >= MIN_SUSTAINED_FRAMES);
+        prev_sustained = now_sustained;
+
+        const float frame_duration_s = static_cast<float>(num_samples) / sr;
+        detect_key(rms, now_sustained, sr);
+        detect_tempo(pcm_data, num_samples, sr, rms, frame_contaminated, frame_duration_s);
+    }
+
     float get_rms() const {
         return last_frame_rms.load(std::memory_order_relaxed);
     }
@@ -1080,6 +1085,10 @@ void engine_push_audio(EngineState* engine, const float* pcm_data, int num_sampl
 EngineOutput engine_tick_tempo(EngineState* engine, float time_delta_seconds) {
     if (engine && engine->instance) return engine->instance->tick_tempo(time_delta_seconds);
     return EngineOutput{-1, 0.0f, 0};
+}
+
+void engine_set_verbose(int verbose) {
+    g_engine_verbose = (verbose != 0);
 }
 
 void engine_set_genre(EngineState* engine, int genre_code) {

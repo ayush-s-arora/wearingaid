@@ -234,10 +234,24 @@ void verify_tempo_logic() {
 }
 
 int main(int argc, char** argv) {
-    // With a WAV path: offline evaluation against known ground truth.
-    // Without arguments: the synthetic DSP verification suite.
-    if (argc > 1) return run_wav(argv[1]);
+    bool verbose = false;
+    const char* wav_path = nullptr;
 
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--verbose") == 0 || std::strcmp(argv[i], "-v") == 0) {
+            verbose = true;
+        } else {
+            wav_path = argv[i];
+        }
+    }
+
+    // Apply the verbose flag globally for the C API
+    engine_set_verbose(verbose ? 1 : 0);
+
+    // With a WAV path: offline evaluation against known ground truth.
+    if (wav_path) return run_wav(wav_path);
+
+    // Without arguments: the synthetic DSP verification suite.
     std::cout << "--- Starting Strict DSP Logic Verification ---" << std::endl;
     verify_engine_logic();
     verify_tempo_logic();

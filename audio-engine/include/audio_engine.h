@@ -24,7 +24,7 @@ void engine_push_audio(EngineState* engine, const float* pcm_data, int num_sampl
 
 // Called when the audio thread detects a volume spike for onset detection
 EngineOutput engine_tick_tempo(EngineState* engine, float time_delta_seconds);
-
+void engine_set_verbose(int verbose);
 void engine_set_genre(EngineState* engine, int genre_code); // 0 Temperley, 1 Shaath, 2 EDMA, 3 Wei Chai, 4 Tonic Triad
 void engine_set_features(EngineState* engine, uint32_t features); // bitmask of WEARINGAID_FEATURE_*
 void engine_reset(EngineState* engine);
