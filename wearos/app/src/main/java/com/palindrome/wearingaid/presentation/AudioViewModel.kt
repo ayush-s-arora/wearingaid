@@ -36,6 +36,10 @@ class AudioViewModel : ViewModel() {
         audioEngine.start()
     }
 
+    fun resetEngine() {
+        audioEngine.reset()
+    }
+
     fun getDebugPacket(keyIndex: Int, bpm: Float): String {
         val rms = audioEngine.getRms()
         return "k=$keyIndex,b=${bpm.toInt()},r=${"%.3f".format(rms)}"

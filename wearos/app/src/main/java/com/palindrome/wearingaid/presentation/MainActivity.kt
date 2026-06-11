@@ -117,18 +117,22 @@ private val ENGINE_KEYS = arrayOf(
     "F# Minor", "G Minor", "G# Minor", "A Minor", "A# Minor", "B Minor"
 )
 
+// MUST stay byte-identical to `initialPalette` in companion/app/page.tsx: the watch
+// renders these colors before (and without) a companion connection, and the companion
+// shows the same swatches in its picker — if the two defaults diverge, the watch and
+// companion disagree until the user manually edits a color.
 private val DEFAULT_PALETTE = mapOf(
     "C Major" to "#FF0000", "C Minor" to "#8B0000",
     "C# Major" to "#FF4500", "C# Minor" to "#8B2500",
     "D Major" to "#FFA500", "D Minor" to "#8B5A00",
     "D# Major" to "#FFD700", "D# Minor" to "#8B7500",
     "E Major" to "#FFFF00", "E Minor" to "#8B8B00",
-    "F Major" to "#00FF00", "F Minor" to "#006400",
-    "F# Major" to "#00FFFF", "F# Minor" to "#008B8B",
-    "G Major" to "#0000FF", "G Minor" to "#00008B",
-    "G# Major" to "#4B0082", "G# Minor" to "#2E0854",
-    "A Major" to "#8A2BE2", "A Minor" to "#551A8B",
-    "A# Major" to "#FF1493", "A# Minor" to "#8B0A50",
+    "F Major" to "#ADFF2F", "F Minor" to "#556B2F",
+    "F# Major" to "#00FF00", "F# Minor" to "#006400",
+    "G Major" to "#00FA9A", "G Minor" to "#008B45",
+    "G# Major" to "#00FFFF", "G# Minor" to "#008B8B",
+    "A Major" to "#0000FF", "A Minor" to "#00008B",
+    "A# Major" to "#8A2BE2", "A# Minor" to "#4B0082",
     "B Major" to "#FF00FF", "B Minor" to "#8B008B"
 )
 
@@ -152,7 +156,7 @@ class MainActivity : ComponentActivity() {
     private var companionModeEnabled by mutableStateOf(false)
     private var selectedGenre by mutableStateOf<GenreProfile?>(null)
     private var activeKeyIndex by mutableIntStateOf(-1)
-    private var estimatedBpm by mutableFloatStateOf(120f)
+    private var estimatedBpm by mutableFloatStateOf(0f) // 0 = nothing tracked yet; UI hides the readout
     private var vibrationSensitivity by mutableIntStateOf(5)
     private val palette = mutableStateMapOf<String, String>().apply { putAll(DEFAULT_PALETTE) }
 
@@ -246,7 +250,8 @@ class MainActivity : ComponentActivity() {
                 onToggleDebugMode = { debugMode = !debugMode },
                 onToggleFeature = { bit -> toggleFeature(bit) },
                 onAudioTick = { readAudioOutput() },
-                onDebugTick = { sendDebugPacket() }
+                onDebugTick = { sendDebugPacket() },
+                onResetEngine = { audioViewModel.resetEngine() }
             )
         }
 
@@ -406,15 +411,18 @@ class MainActivity : ComponentActivity() {
             val rawFeatures = parts.getOrNull(0)?.toIntOrNull()
             val newFeatures = rawFeatures?.and(0x3)
             val listenRequested = rawFeatures?.and(FEATURE_LISTENING)?.let { it != 0 }
-            vibrationSensitivity = parts.getOrNull(1)?.toInt()?.coerceIn(1, 10) ?: vibrationSensitivity
+            vibrationSensitivity = parts.getOrNull(1)?.toIntOrNull()?.coerceIn(1, 10) ?: vibrationSensitivity
             val newGenreCode = parts.getOrNull(2)?.toIntOrNull()?.takeIf { it in 0..4 }
             for (i in COMPANION_PAYLOAD_KEYS.indices) {
                 val hex = parts.getOrNull(i + 3)
                 if (!hex.isNullOrBlank()) palette[COMPANION_PAYLOAD_KEYS[i]] = hex
             }
-            if (newFeatures != null) applyFeaturesFromCompanion(newFeatures)
+            if (newFeatures != null && newFeatures != featuresEnabled) applyFeaturesFromCompanion(newFeatures)
             if (listenRequested != null && listenRequested != isRecording) toggleRecording()
-            if (newGenreCode != null) {
+            // Only apply a genre that actually CHANGED: every config packet carries the
+            // genre, and re-applying the current one resets the engine's key lock —
+            // dragging the sensitivity slider was wiping the detected key mid-song.
+            if (newGenreCode != null && newGenreCode != selectedGenre?.code) {
                 val genre = GENRE_PROFILES.firstOrNull { it.code == newGenreCode }
                 if (genre != null) applyGenreFromCompanion(genre)
             }
@@ -472,7 +480,8 @@ private fun WearingAidApp(
     onToggleDebugMode: () -> Unit,
     onToggleFeature: (Int) -> Unit,
     onAudioTick: suspend () -> Unit,
-    onDebugTick: () -> Unit
+    onDebugTick: () -> Unit,
+    onResetEngine: () -> Unit
 ) {
     WearingAidTheme {
         AppScaffold {
@@ -529,11 +538,13 @@ private fun WearingAidApp(
                                 0 -> ListeningScreen(
                                     selectedGenre = selectedGenre,
                                     isRecording = isRecording,
+                                    featuresEnabled = featuresEnabled,
                                     activeKeyIndex = activeKeyIndex,
                                     activeKeyColor = activeKeyColor,
                                     estimatedBpm = estimatedBpm,
                                     syncState = syncState,
-                                    onToggleListening = onToggleListening
+                                    onToggleListening = onToggleListening,
+                                    onResetEngine = onResetEngine
                                 )
                                 1 -> GenreSelectionScreen(
                                     selectedGenre = selectedGenre,
@@ -569,14 +580,21 @@ private fun WearingAidApp(
 private fun ListeningScreen(
     selectedGenre: GenreProfile,
     isRecording: Boolean,
+    featuresEnabled: Int,
     activeKeyIndex: () -> Int,
     activeKeyColor: () -> String,
     estimatedBpm: () -> Float,
     syncState: SyncState,
-    onToggleListening: () -> Unit
+    onToggleListening: () -> Unit,
+    onResetEngine: () -> Unit
 ) {
+    val keyOn = featuresEnabled and FEATURE_KEY != 0
+    val tempoOn = featuresEnabled and FEATURE_TEMPO != 0
     val currentKeyIndex = activeKeyIndex()
-    val hasDetectedKey = isRecording && currentKeyIndex in ENGINE_KEYS.indices
+    val hasDetectedKey = keyOn && isRecording && currentKeyIndex in ENGINE_KEYS.indices
+    // Engine reports BPM 0 while silent or when tempo tracking is off.
+    val bpm = estimatedBpm().roundToInt()
+    val showBpm = tempoOn && isRecording && bpm > 0
     val backgroundColor = if (hasDetectedKey) parseHexColor(activeKeyColor()) else MaterialTheme.colorScheme.background
     val foregroundColor = if (hasDetectedKey && backgroundColor.luminanceEstimate() > 0.55f) Color.Black else MaterialTheme.colorScheme.onBackground
 
@@ -595,6 +613,9 @@ private fun ListeningScreen(
                     verticalArrangement = Arrangement.Center,
                     modifier = Modifier.fillMaxWidth()
                 ) {
+                    // Primary line: detected key when key detection is on, otherwise the
+                    // BPM readout when tempo tracking is on, otherwise the listening state.
+                    // Secondary line: BPM under the key (both features on), else genre.
                     if (hasDetectedKey) {
                         Text(
                             text = ENGINE_KEYS[currentKeyIndex],
@@ -604,16 +625,21 @@ private fun ListeningScreen(
                             textAlign = TextAlign.Center
                         )
                         Text(
-                            text = "${estimatedBpm().roundToInt()} BPM",
+                            text = if (showBpm) "$bpm BPM" else selectedGenre.title,
                             color = foregroundColor.copy(alpha = 0.78f),
                             style = MaterialTheme.typography.labelMedium
                         )
                     } else {
                         Text(
-                            text = if (isRecording) "Listening" else "Paused",
+                            text = when {
+                                !isRecording -> "Paused"
+                                showBpm -> "$bpm BPM"
+                                else -> "Listening"
+                            },
                             color = foregroundColor,
                             style = MaterialTheme.typography.displayMedium,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Bold,
+                            textAlign = TextAlign.Center
                         )
                         Text(
                             text = selectedGenre.title,
@@ -622,12 +648,26 @@ private fun ListeningScreen(
                         )
                     }
                     Spacer(modifier = Modifier.height(12.dp))
-                    Button(
-                        onClick = onToggleListening,
-                        modifier = Modifier.fillMaxWidth(0.58f)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(0.85f),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                            Text(text = if (isRecording) "Pause" else "Resume")
+                        Button(
+                            onClick = onToggleListening,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                                Text(text = if (isRecording) "Pause" else "Resume")
+                            }
+                        }
+                        Button(
+                            onClick = onResetEngine,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                                Text(text = "Reset")
+                            }
                         }
                     }
                 }
@@ -914,6 +954,7 @@ private fun WearingAidAppPreview() {
         onToggleDebugMode = {},
         onToggleFeature = {},
         onAudioTick = {},
-        onDebugTick = {}
+        onDebugTick = {},
+        onResetEngine = {}
     )
 }

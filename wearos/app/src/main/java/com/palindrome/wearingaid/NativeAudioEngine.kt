@@ -23,6 +23,7 @@ class NativeAudioEngine {
     external fun setFeatures(handle: Long, features: Int)
 
     private external fun createEngine(): Long
+    private external fun resetEngine(handle: Long)
     private external fun destroyEngine(handle: Long)
 
     // Helper functions to isolate Oboe logic from rest of app
@@ -31,12 +32,15 @@ class NativeAudioEngine {
     fun tick(deltaSec: Float): Boolean = tickTempo(engineHandle, deltaSec)
     fun selectGenre(genreCode: Int) = setGenre(engineHandle, genreCode)
     fun updateFeatures(features: Int) = setFeatures(engineHandle, features)
+    fun reset() = resetEngine(engineHandle)
     fun getRms(): Float = getRms(engineHandle)
     fun readOutput(deltaSec: Float): EngineSnapshot {
         val output = tickOutput(engineHandle, deltaSec)
+        // Defaults match the engine's "nothing detected" outputs: -1 = no key (0 would
+        // render as C Major), 0 BPM = hide the readout (120 would show a fake tempo).
         return EngineSnapshot(
-            keyIndex = output.getOrNull(0)?.toInt() ?: 0,
-            bpm = output.getOrNull(1) ?: 120f,
+            keyIndex = output.getOrNull(0)?.toInt() ?: -1,
+            bpm = output.getOrNull(1) ?: 0f,
             shouldVibrate = (output.getOrNull(2) ?: 0f) > 0f
         )
     }

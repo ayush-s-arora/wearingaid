@@ -160,6 +160,12 @@ Java_com_palindrome_wearingaid_NativeAudioEngine_setFeatures(JNIEnv *env, jobjec
 }
 
 JNIEXPORT void JNICALL
+Java_com_palindrome_wearingaid_NativeAudioEngine_resetEngine(JNIEnv *env, jobject thiz, jlong handle) {
+    auto* wrapper = reinterpret_cast<OboeEngineWrapper*>(handle);
+    if (wrapper) engine_reset(wrapper->core_engine);
+}
+
+JNIEXPORT void JNICALL
 Java_com_palindrome_wearingaid_NativeAudioEngine_destroyEngine(JNIEnv *env, jobject thiz, jlong handle) {
     auto* wrapper = reinterpret_cast<OboeEngineWrapper*>(handle);
     delete wrapper;

@@ -204,8 +204,9 @@ class BleServerManager(
             characteristic: BluetoothGattCharacteristic
         ) {
             if (characteristic.uuid == featuresUuid) {
+                // Fallback matches the "features,genre" wire format (genre -1 = none yet)
                 @Suppress("DEPRECATION")
-                val value = characteristic.value ?: "3".toByteArray(Charsets.UTF_8)
+                val value = characteristic.value ?: "3,-1".toByteArray(Charsets.UTF_8)
                 gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, value)
             }
         }

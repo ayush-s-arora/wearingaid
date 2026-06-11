@@ -201,6 +201,7 @@ export default function Home() {
       const debugChar = await service?.getCharacteristic(DEBUG_CHARACTERISTIC_UUID).catch(() => null);
       debugCharacteristicRef.current = debugChar ?? null;
 
+      let gotInitialWatchState = false;
       const featuresChar = await service?.getCharacteristic(FEATURES_CHARACTERISTIC_UUID).catch(() => null);
       if (featuresChar) {
         featuresCharacteristicRef.current = featuresChar;
@@ -238,6 +239,7 @@ export default function Home() {
           // Explicit read guarantees initial state even when push-on-subscribe didn't fire
           const currentValue = await featuresChar.readValue();
           applyFeaturesValue(currentValue);
+          gotInitialWatchState = true;
         } catch (e) {
           console.error("Failed to subscribe to features characteristic:", e);
         }
@@ -257,6 +259,11 @@ export default function Home() {
       setDevice(selectedDevice);
       setCharacteristic(configChar);
       setHeartbeatCharacteristic(heartbeatChar);
+      // The state setters above only reach the refs after the next render; set the
+      // refs synchronously so the initial config push below can flush right now.
+      deviceRef.current = selectedDevice;
+      characteristicRef.current = configChar;
+      heartbeatCharacteristicRef.current = heartbeatChar;
 
       selectedDevice.addEventListener("gattserverdisconnected", handleDisconnected);
 
@@ -268,6 +275,17 @@ export default function Home() {
           handleDisconnected();
           return;
         }
+      }
+
+      // Push the full config (palette + sensitivity) immediately so the watch's key
+      // colors match the companion's from the moment of connection — without this the
+      // watch keeps whatever palette it booted with until the user edits a control.
+      // Features/genre/listening in the packet echo what was just READ from the watch
+      // (refs set in applyFeaturesValue), so this write doesn't clobber watch state.
+      // Skipped if the initial state read failed: pushing defaults blind could pause
+      // a watch that is currently listening.
+      if (gotInitialWatchState) {
+        queueConfigPacket(sensitivity, palette);
       }
     } catch (error) {
       console.error(error);

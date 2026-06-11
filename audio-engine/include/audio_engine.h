@@ -27,6 +27,7 @@ EngineOutput engine_tick_tempo(EngineState* engine, float time_delta_seconds);
 
 void engine_set_genre(EngineState* engine, int genre_code); // 0 Temperley, 1 Shaath, 2 EDMA, 3 Wei Chai, 4 Tonic Triad
 void engine_set_features(EngineState* engine, uint32_t features); // bitmask of WEARINGAID_FEATURE_*
+void engine_reset(EngineState* engine);
 
 // Tell the engine the ACTUAL capture sample rate (Hz) the audio backend delivers.
 // All frequency→pitch and tempo timing math depends on this; the hardcoded default
