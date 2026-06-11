@@ -660,6 +660,8 @@ private fun ListeningScreen(
                         ) {
                             Text(
                                 text = if (isRecording) "Pause" else "Resume",
+                                modifier = Modifier.fillMaxWidth(),
+                                textAlign = TextAlign.Center,
                                 maxLines = 1,
                                 style = MaterialTheme.typography.labelMedium
                             )
@@ -671,6 +673,8 @@ private fun ListeningScreen(
                         ) {
                             Text(
                                 text = "Reset",
+                                modifier = Modifier.fillMaxWidth(),
+                                textAlign = TextAlign.Center,
                                 maxLines = 1,
                                 style = MaterialTheme.typography.labelMedium
                             )

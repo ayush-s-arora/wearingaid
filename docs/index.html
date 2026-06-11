@@ -154,13 +154,112 @@
       </ol>
 
       <h3>How does the audio engine work?</h3>
-      <ol>
-        <li><strong>Tempo:</strong> every frame, the engine computes a spectral flux onset strength (how much the spectrum jumps from one frame to the next, which spikes on note attacks) and buffers it over roughly 6 seconds. Autocorrelating that envelope finds the lag where the beat repeats, which gives the tempo, and a phase-locked clock nudges the wrist vibration onto the beat instead of letting it free-run.</li>
-        <li><strong>Key detection:</strong> audio is run through a 4096 point FFT (Hann windowed) and the energy is folded into a 12 bin chromagram, one bin per pitch class, over the ~100-2000 Hz range where chord roots live. That chroma is smoothed over a few seconds so it reflects the song's key rather than each passing chord, then matched against 24 major and minor key profiles, with the best match winning. A short hold (hysteresis) keeps the displayed key from flickering between closely related keys.</li>
-      </ol>
+      <img src="flowchart.png" alt="Architecture Flowchart" style="max-width:100%; height:auto; margin-bottom: 20px; border-radius: 8px; border: 1px solid var(--border);" />
+
+      <p><strong>Key Detection:</strong></p>
+      <ul>
+        <li><strong>HMM Filter:</strong> Hidden Markov Model (HMM) since key changes typically follow the circle of fifths.</li>
+        <li><strong>Pearson Correlation:</strong> Pre-computes mean-centered and L2-normalized key profiles to penalize energy where the key profile expects silence.</li>
+        <li><strong>Transition Prior:</strong> Emphasizes circle-of-fifths neighbors, relative major/minor, and parallel keys over distant modulations.</li>
+        <li><strong>Parabolic Interpolation:</strong> Accumulates energy exclusively from local maxima with parabolic interpolation. This prevents broadband noise from dominating the spectrum, allowing for much more robust binning of bass frequencies.</li>
+        <li><strong>Drone Rejection & Pitch-Grid Gate:</strong> Subtracts stationary tones (e.g., AC hum) using a leaky <code>drone_mag</code> floor, and employs a pitch-grid gate to drop frequencies over 35 cents off from a true semitone.</li>
+        <li><strong>Haptic Suppression:</strong> Utilizes <code>chroma_contaminated</code> flags and <code>HAPTIC_SUPPRESS_FRAMES</code> to completely skip analysis windows that are contaminated by the tempo tracking vibration motor buzz.</li>
+        <li><strong>Robust Logcat:</strong> Emits clear diagnostic states (including starved window tracking for haptic suppression).</li>
+      </ul>
+
+      <p><strong>Tempo Tracking:</strong></p>
+      <ul>
+        <li><strong>Masked Autocorrelation:</strong> Increases the masked autocorrelation envelope size and actively cancels out motor buzz by feeding <code>0</code> (buzz) or <code>1</code> (content) masks from the <code>env_mask</code> into the correlation.</li>
+        <li><strong>Subdivision Support:</strong> Addresses eighth notes by forbidding an artificially fast tempo (e.g., 144 BPM) from borrowing correlation from a slower tempo (72 BPM). Actively rewards eighth note subdivisions with a bonus to favor the true main beat (72 BPM).</li>
+      </ul>
 
       <h3>What is the impact of genre selection?</h3>
-      <p>Each genre corresponds with a different key profile in the audio engine. The engine matches the detected chroma against the selected profile to identify the key, and they differ because different genres emphasize scale degrees differently (for instance, electronic music leans heavily on the tonic and fifth, while jazz and classical voicings spread weight across more of the scale). Profile-specific implementation inspired by Dr. Emilia G´omez Guti'errez's doctoral dissertation, TONAL DESCRIPTION OF MUSIC AUDIO SIGNALS. Profiles derived from the Music Technology Group - Universitat Pompeu Fabra's Essentia library (<a href="https://github.com/MTG/essentia/blob/master/src/algorithms/tonal/key.cpp">github</a>).</p>
+      <p>Each genre corresponds with a different key profile in the audio engine. The engine matches the detected chroma against the selected profile to identify the key, and they differ because different genres emphasize scale degrees differently (for instance, electronic music leans heavily on the tonic and fifth, while jazz and classical voicings spread weight across more of the scale). Profile-specific implementation inspired by Dr. Emilia Gómez Gutiérrez's doctoral dissertation, TONAL DESCRIPTION OF MUSIC AUDIO SIGNALS. Profiles derived from the Music Technology Group - Universitat Pompeu Fabra's Essentia library (<a href="https://github.com/MTG/essentia/blob/master/src/algorithms/tonal/key.cpp">github</a>).</p>
+
+      <h3>Evaluation</h3>
+      <p>To test the system's accuracy, I analyzed four songs with well-known BPM and key signatures. I fed the raw audio files (<code>.wav</code>) into the standalone C++ testing script (<code>main.cpp</code>) to measure the baseline DSP performance without microphone or ambient noise contamination. The script was executed via <code>./build/test_engine ../test-wav/{song-name}.wav</code>.</p>
+
+      <h4>Results</h4>
+      <div style="overflow-x:auto;">
+        <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px; text-align: left;">
+          <thead>
+            <tr style="border-bottom: 1px solid var(--border); color: var(--muted);">
+              <th style="padding: 10px;">Song</th>
+              <th style="padding: 10px;">Genre</th>
+              <th style="padding: 10px;">Ground Truth</th>
+              <th style="padding: 10px;">Key Analysis</th>
+              <th style="padding: 10px;">Tempo Analysis</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr style="border-bottom: 1px solid var(--border-2);">
+              <td style="padding: 10px;"><strong>"Let It Be"</strong> - The Beatles</td>
+              <td style="padding: 10px;">Band</td>
+              <td style="padding: 10px;">C Major, ~72 BPM</td>
+              <td style="padding: 10px;">95.0% (228/240) as C Major</td>
+              <td style="padding: 10px;">72.5% (145/200) within &plusmn;3 BPM</td>
+            </tr>
+            <tr style="border-bottom: 1px solid var(--border-2);">
+              <td style="padding: 10px;"><strong>"Through the Wire"</strong> - Kanye West</td>
+              <td style="padding: 10px;">Band</td>
+              <td style="padding: 10px;">G Major, ~83 BPM</td>
+              <td style="padding: 10px;">10.0% G Major, 70.8% A Minor<br><span style="font-size: 0.9em; color: var(--muted);">(relative minor conflation due to ii chord)</span></td>
+              <td style="padding: 10px;">98.6% (216/219) within &plusmn;3 BPM</td>
+            </tr>
+            <tr style="border-bottom: 1px solid var(--border-2);">
+              <td style="padding: 10px;"><strong>"House of the Rising Sun"</strong> - The Animals</td>
+              <td style="padding: 10px;">Band</td>
+              <td style="padding: 10px;">A Minor, ~117 BPM</td>
+              <td style="padding: 10px;">94.4% (251/266) as A Minor</td>
+              <td style="padding: 10px;">12.0% (32/266) within &plusmn;3 BPM<br><span style="font-size: 0.9em; color: var(--muted);">(due to rolling arpeggios)</span></td>
+            </tr>
+            <tr style="border-bottom: 1px solid var(--border-2);">
+              <td style="padding: 10px;"><strong>"Fly Me to the Moon"</strong> - Frank Sinatra</td>
+              <td style="padding: 10px;">Classical</td>
+              <td style="padding: 10px;">C Major, ~120 BPM</td>
+              <td style="padding: 10px;">18.0% (25/139) as C Major</td>
+              <td style="padding: 10px;">17.3% (24/139) within &plusmn;3 BPM<br><span style="font-size: 0.9em; color: var(--muted);">(due to swung rhythm)</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h4>Live App Demonstrations</h4>
+      <p>Below are demonstrations of the WearOS app running these songs live. When tested through the smartwatch microphone in a real-world acoustic environment, the app exhibited the following behaviors:</p>
+      
+      <ul>
+        <li><strong>"Let It Be":</strong> Started at A minor (~72 BPM) before quickly converging to the correct C major key. The BPM fluctuated heavily for a few seconds at a time (spiking from ~70 BPM to 171 BPM at one point) before settling back down. This turbulence is likely due to the engine transiently locking onto dense eighth-note piano subdivisions before accumulating enough correlation to restore the slower main beat.</li>
+        <li><strong>"Through The Wire":</strong> Found A minor almost immediately. The BPM started at 60 but quickly locked onto a steady ~80 BPM. This behavior closely mirrored the pristine non-mic baseline test.</li>
+        <li><strong>"House of the Rising Sun":</strong> Quickly converged to A minor. The tempo started at ~122 BPM, dropped to oscillate between 70-90 BPM, and eventually stabilized at ~116 BPM. This dynamic convergence actually outperformed the non-mic baseline test for tempo lock!</li>
+        <li><strong>"Fly Me to the Moon":</strong> The key detection was inconclusive, rapidly fluctuating between several localized chords (including F major, E minor, etc.) due to the dense jazz harmony. However, the BPM stabilized around 62 BPM&mdash;exactly half of the 120 BPM expected. This is a classic "octave error" where the autocorrelation confidently locked onto the half-time pulse of the swung rhythm.</li>
+      </ul>
+
+      <p><strong>Let It Be:</strong></p>
+      <video src="let_it_be.mp4" controls="controls" style="max-width: 100%; border-radius: 8px; margin-bottom: 20px; border: 1px solid var(--border);"></video>
+
+      <p><strong>Through The Wire:</strong></p>
+      <video src="through_the_wire.mp4" controls="controls" style="max-width: 100%; border-radius: 8px; margin-bottom: 20px; border: 1px solid var(--border);"></video>
+
+      <p><strong>House of the Rising Sun:</strong></p>
+      <video src="rising_sun.mp4" controls="controls" style="max-width: 100%; border-radius: 8px; margin-bottom: 20px; border: 1px solid var(--border);"></video>
+
+      <p><strong>Fly Me to the Moon:</strong></p>
+      <video src="fly_me_to_the_moon.mp4" controls="controls" style="max-width: 100%; border-radius: 8px; margin-bottom: 20px; border: 1px solid var(--border);"></video>
+
+      <h3>Build Instructions</h3>
+      <p>To build the standalone C++ audio engine for local testing:</p>
+      <pre><code>cd audio-engine
+rm -rf build
+mkdir build && cd build
+cmake ..
+make</code></pre>
+
+      <h3>Known Limitations</h3>
+      <ol>
+        <li><strong>Tempo Stabilization &amp; Octave Errors:</strong> The tempo tracker requires several seconds of buffered audio to lock onto a steady beat. Despite active subdivision weighting, passages with dense eighth-note rhythms or complex syncopation can occasionally induce transient "octave errors" (e.g., temporarily jumping to 144 BPM instead of 72 BPM) before the algorithm re-stabilizes.</li>
+        <li><strong>Local Chord Tracking vs. Global Key:</strong> The key detection algorithm evaluates a short-term smoothed chromagram. Consequently, it may sometimes track localized chord progressions rather than retaining the overarching structural key of the song.</li>
+        <li><strong>Major/Minor Ambiguity:</strong> The engine occasionally conflates relative major and minor keys (e.g., C Major and A Minor). Because relative keys share the exact same pitch classes, the algorithm can briefly flip between them depending on which specific chords the band is emphasizing in the current phrase.</li>
+      </ol>
     </section>
 
   </main>
