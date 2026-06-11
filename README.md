@@ -67,16 +67,16 @@ Below are demonstrations of the WearOS app running these songs live. When tested
 - **"Fly Me to the Moon":** The key detection was inconclusive, rapidly fluctuating between several localized chords (including F major, E minor, etc.) due to the dense jazz harmony. However, the BPM stabilized around 62 BPM—exactly half of the 120 BPM expected. This is a classic "octave error" where the autocorrelation confidently locked onto the half-time pulse of the swung rhythm.
 
 **Let It Be:**
-<video src="docs/let_it_be.mp4" controls="controls" style="max-width: 100%;"></video>
+<iframe width="560" height="315" src="https://www.youtube.com/embed/PHp5hD5OycY" frameborder="0" allowfullscreen></iframe>
 
 **Through The Wire:**
-<video src="docs/through_the_wire.mp4" controls="controls" style="max-width: 100%;"></video>
+<iframe width="560" height="315" src="https://www.youtube.com/embed/cPmEWVsNGbs" frameborder="0" allowfullscreen></iframe>
 
 **House of the Rising Sun:**
-<video src="docs/rising_sun.mp4" controls="controls" style="max-width: 100%;"></video>
+<iframe width="560" height="315" src="https://www.youtube.com/embed/o67x4LC6jo4" frameborder="0" allowfullscreen></iframe>
 
 **Fly Me to the Moon:**
-<video src="docs/fly_me_to_the_moon.mp4" controls="controls" style="max-width: 100%;"></video>
+<iframe width="560" height="315" src="https://www.youtube.com/embed/atK2s6ZrLnw" frameborder="0" allowfullscreen></iframe>
 
 ## Build Instructions
 
