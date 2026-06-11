@@ -1,3 +1,0 @@
-[submodule "audio-engine/third_party/pffft"]
-	path = audio-engine/third_party/pffft
-	url = https://github.com/marton78/pffft.git
