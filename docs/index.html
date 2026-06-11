@@ -50,6 +50,13 @@
     padding: 8px 16px; font-size: 13px; color: var(--muted); font-family: ui-monospace, monospace;
   }
   .pill b { color: var(--text); }
+  .links { margin-top: 16px; display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+  .links a {
+    border: 1px solid var(--border-2); border-radius: 10px;
+    padding: 8px 16px; font-size: 13px; font-family: ui-monospace, monospace;
+    color: var(--accent-hover); text-decoration: none;
+  }
+  .links a:hover { background: var(--card); text-decoration: none; }
   main { padding: 64px 0 80px; }
   section { margin-bottom: 30px; }
   .card {
@@ -92,6 +99,10 @@
         <span class="pill"><b>Haptic</b> tempo</span>
         <span class="pill"><b>C++</b> audio engine</span>
         <span class="pill"><b>BLE</b> companion</span>
+      </div>
+      <div class="links">
+        <a href="https://github.com/ayush-s-arora/wearingaid">GitHub Repo</a>
+        <a href="https://wearingaid.vercel.app/">Companion App</a>
       </div>
     </div>
   </header>
